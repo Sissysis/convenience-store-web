@@ -197,6 +197,57 @@ const Store = (function () {
 })();
 
 /* ============================================================
+   SERVER API (shared data sync backend)
+   Falls back to local-only mode when the server is unreachable.
+   ============================================================ */
+
+const API = (function () {
+
+    let up = null;          // null = unknown, true/false after first check
+    let inflight = null;    // in-flight health promise
+    const TIMEOUT = 6000;
+
+    function isUp() {
+        return up === true;
+    }
+
+    function ping() {
+        if (up !== null) return Promise.resolve(up);
+        if (inflight) return inflight;
+        inflight = req('/api/health').then(r => {
+            up = r.status === 200 && r.data.ok === true;
+            return up;
+        }).finally(() => { inflight = null; });
+        return inflight;
+    }
+
+    async function req(path, opts) {
+        opts = opts || {};
+        const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+        const timer = ctrl ? setTimeout(() => ctrl.abort(), TIMEOUT) : null;
+        const headers = { 'Content-Type': 'application/json' };
+        if (opts.token) headers['Authorization'] = 'Bearer ' + opts.token;
+        try {
+            const res = await window.fetch(path, {
+                method: opts.method || 'GET',
+                headers: headers,
+                body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+                signal: ctrl ? ctrl.signal : undefined,
+                cache: 'no-store'
+            });
+            const data = await res.json().catch(() => ({}));
+            return { status: res.status, data: data };
+        } catch (err) {
+            return { status: 0, data: {} };
+        } finally {
+            if (timer) clearTimeout(timer);
+        }
+    }
+
+    return { req, ping, isUp };
+})();
+
+/* ============================================================
    AUTH MODULE
    ============================================================ */
 
@@ -284,10 +335,25 @@ const Auth = (function () {
             createdAt: Date.now()
         };
 
+        // When the server is reachable, create the account there first so it
+        // exists on every device. The shared store data is NOT touched here.
+        const serverUp = await API.ping();
+        if (serverUp) {
+            const r = await API.req('/api/register', {
+                method: 'POST',
+                body: { username: user.username, salt: salt, hash: hash, rounds: 10 }
+            });
+            if (r.status === 409) {
+                return { ok: false, message: 'Username is already taken.' };
+            }
+            if (r.status !== 200) {
+                return { ok: false, message: 'Could not reach the server right now. Please try again.' };
+            }
+        }
+
         users[userId] = user;
         saveUsers(users);
-
-        saveUserData(username, { products: [], notes: [], lists: [], debts: [] });
+        saveUserDataLocal(username, { products: [], notes: [], lists: [], debts: [] });
 
         return { ok: true, user: user };
     }
@@ -299,15 +365,66 @@ const Auth = (function () {
         }
 
         const users = getUsers();
-        const account = Object.values(users).find(u => u.username.toLowerCase() === username.toLowerCase());
+        const localAccount = Object.values(users).find(u => u.username.toLowerCase() === username.toLowerCase());
 
-        if (!account) {
+        const serverUp = await API.ping();
+
+        /* -------- Server sync path -------- */
+        if (serverUp) {
+            const saltRes = await API.req('/api/salt?username=' + encodeURIComponent(username));
+
+            if (saltRes.status === 200 && saltRes.data.salt) {
+                const hash = await Security.hashPassword(password, saltRes.data.salt);
+                const lg = await API.req('/api/login', {
+                    method: 'POST',
+                    body: { username: username, salt: saltRes.data.salt, hash: hash, rounds: 10 }
+                });
+                if (lg.status !== 200 || !lg.data.token) {
+                    recordFailedAttempt(username);
+                    return { ok: false, message: lg.data.error || 'Login failed.' };
+                }
+                resetAttempts(username);
+                return finishServerLogin(username, saltRes.data.salt, hash, lg.data, localAccount, false);
+            }
+
+            // Server has no account yet -> migrate this local account to the server
+            if (saltRes.status === 404 && localAccount) {
+                const localHash = await Security.hashPassword(password, localAccount.salt);
+                if (localHash !== localAccount.hash) {
+                    const count = recordFailedAttempt(username);
+                    const left = MAX_ATTEMPTS - count;
+                    return { ok: false, message: 'Incorrect password.' + (left > 0 ? ' Attempts left: ' + left : ' Account temporarily locked.') };
+                }
+
+                const reg = await API.req('/api/register', {
+                    method: 'POST',
+                    body: { username: localAccount.username, salt: localAccount.salt, hash: localAccount.hash, rounds: 10 }
+                });
+                if (reg.status !== 200) {
+                    return { ok: false, message: 'Could not reach the server right now. Please try again.' };
+                }
+
+                const lg = await API.req('/api/login', {
+                    method: 'POST',
+                    body: { username: localAccount.username, salt: localAccount.salt, hash: localAccount.hash, rounds: 10 }
+                });
+                if (lg.status !== 200 || !lg.data.token) {
+                    return { ok: false, message: 'Login failed.' };
+                }
+
+                resetAttempts(username);
+                return finishServerLogin(username, localAccount.salt, localAccount.hash, lg.data, localAccount, true);
+            }
+        }
+
+        /* -------- Local-only / offline fallback path -------- */
+        if (!localAccount) {
             recordFailedAttempt(username);
             return { ok: false, message: 'No account found with that username.' };
         }
 
-        const hash = await Security.hashPassword(password, account.salt);
-        if (hash !== account.hash) {
+        const hash = await Security.hashPassword(password, localAccount.salt);
+        if (hash !== localAccount.hash) {
             const count = recordFailedAttempt(username);
             const left = MAX_ATTEMPTS - count;
             return {
@@ -317,16 +434,158 @@ const Auth = (function () {
         }
 
         resetAttempts(username);
-        Store.set(SESSION_KEY, { userId: account.id, username: account.username, loginAt: Date.now() });
-        return { ok: true, user: account };
+        Store.set(SESSION_KEY, { userId: localAccount.id, username: localAccount.username, loginAt: Date.now() });
+        return { ok: true, user: localAccount };
+    }
+
+    function finishServerLogin(username, salt, hash, payload, localAccount, migrated) {
+        const serverUser = payload.user || { username: username, id: username };
+        const serverData = payload.data || null;
+
+        let localUser = localAccount;
+        if (!localUser) {
+            localUser = {
+                id: serverUser.id,
+                username: serverUser.username,
+                usernameLower: username.toLowerCase(),
+                salt: salt,
+                hash: hash,
+                createdAt: Date.now()
+            };
+            const users = getUsers();
+            users[localUser.id] = localUser;
+            saveUsers(users);
+        }
+
+        Store.set(SESSION_KEY, {
+            userId: localUser.id,
+            username: localUser.username,
+            loginAt: Date.now(),
+            token: payload.token
+        });
+
+        // One-time migration: if the shared store is freshly empty and this device
+        // holds real local content, seed the server (never clobbers shared data).
+        const localData = getUserData(username);
+        const emptyServer = !serverData ||
+            (!serverData.products || !serverData.products.length) &&
+            (!serverData.notes || !serverData.notes.length) &&
+            (!serverData.debts || !serverData.debts.length) &&
+            (!serverData.lists || !serverData.lists.length);
+        const hasLocalContent = localData && (
+            (localData.products && localData.products.length) ||
+            (localData.notes && localData.notes.length) ||
+            (localData.debts && localData.debts.length) ||
+            (localData.lists && localData.lists.length));
+
+        if (migrated && emptyServer && hasLocalContent) {
+            const seed = {
+                products: localData.products || [],
+                notes: localData.notes || [],
+                lists: localData.lists || [],
+                debts: localData.debts || []
+            };
+            API.req('/api/data', { method: 'PUT', token: payload.token, body: seed });
+            saveUserData(username, seed);
+        } else if (serverData) {
+            saveUserData(username, {
+                products: serverData.products || [],
+                notes: serverData.notes || [],
+                lists: serverData.lists || [],
+                debts: serverData.debts || []
+            });
+        }
+
+        return { ok: true, user: { username: localUser.username, id: localUser.id } };
     }
 
     function logout() {
+        const session = Store.get(SESSION_KEY, null);
+        if (session && session.token && API.isUp()) {
+            API.req('/api/logout', { method: 'POST', token: session.token, body: {} });
+        }
         Store.remove(SESSION_KEY);
     }
 
+    /* ---------- Server data sync ---------- */
+
+    let syncTimer = null;
+
+    function scheduleSync(username) {
+        if (!API.isUp()) return;
+        const session = Store.get(SESSION_KEY, null);
+        if (!session || !session.token) return;
+        clearTimeout(syncTimer);
+        syncTimer = setTimeout(async () => {
+            syncTimer = null;
+            const data = getUserData(username);
+            const live = Store.get(SESSION_KEY, null);
+            if (!live || !live.token) return;
+            await API.req('/api/data', {
+                method: 'PUT',
+                token: live.token,
+                body: {
+                    products: data && data.products ? data.products : [],
+                    notes: data && data.notes ? data.notes : [],
+                    lists: data && data.lists ? data.lists : [],
+                    debts: data && data.debts ? data.debts : []
+                }
+            });
+        }, 400);
+    }
+
+    function saveUserData(username, data) {
+        Store.set('user_' + username.toLowerCase(), data);
+        scheduleSync(username);
+    }
+
+    function saveUserDataLocal(username, data) {
+        Store.set('user_' + username.toLowerCase(), data);
+    }
+
+    /* ---------- Refresh cache from server (on boot while logged in) ---------- */
+
+    async function refreshFromServer() {
+        const up = await API.ping();
+        if (!up) return 'offline';
+        const session = Store.get(SESSION_KEY, null);
+        if (!session || !session.token) return 'offline';
+
+        const r = await API.req('/api/data', { token: session.token });
+        if (r.status === 401) {
+            Store.remove(SESSION_KEY);
+            return 'expired';
+        }
+        if (r.status === 200 && r.data) {
+            const serverData = {
+                products: r.data.products || [],
+                notes: r.data.notes || [],
+                lists: r.data.lists || [],
+                debts: r.data.debts || []
+            };
+            const local = getUserData(session.username);
+            const localContent = local && (
+                (local.products && local.products.length) ||
+                (local.notes && local.notes.length) ||
+                (local.debts && local.debts.length) ||
+                (local.lists && local.lists.length));
+            const serverEmpty = !serverData.products.length && !serverData.notes.length &&
+                !serverData.debts.length && !serverData.lists.length;
+
+            if (serverEmpty && localContent) {
+                // Device holds data but the shared store is empty -> seed it once.
+                API.req('/api/data', { method: 'PUT', token: session.token, body: local });
+            } else {
+                saveUserDataLocal(session.username, serverData);
+            }
+            return 'ok';
+        }
+        return 'offline';
+    }
+
     return {
-        register, login, logout, getCurrentUser, getUserData, saveUserData, checkLocked
+        register, login, logout, getCurrentUser, getUserData, saveUserData,
+        saveUserDataLocal, refreshFromServer, checkLocked
     };
 })();
 
@@ -1518,6 +1777,19 @@ function boot() {
         const account = users[session.userId];
         if (account) {
             enterStore({ username: account.username, id: account.id });
+
+            // Pull the latest shared data from the server and refresh the UI.
+            Auth.refreshFromServer().then(status => {
+                if (status === 'ok') {
+                    renderProducts();
+                    renderNotes();
+                    renderLists();
+                    renderDebts();
+                } else if (status === 'expired') {
+                    UI.showScreen('auth');
+                    UI.notify('Session expired. Please log in again.', 'warning');
+                }
+            }).catch(() => {});
         }
     }
 }

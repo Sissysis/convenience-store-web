@@ -5,3 +5,6 @@ Desktop.ini
 *.log
 .env
 .env.*
+server/db.json
+server/db.json.tmp
+server/node_modules/
