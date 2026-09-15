@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-Content-Type-Options" content="nosniff">
+    <meta http-equiv="X-Frame-Options" content="DENY">
+    <meta http-equiv="Referrer-Policy" content="strict-origin-when-cross-origin">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline';">
+    <title>Convenience Store</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+    <!-- ===================== INTRO SPLASH SCREEN ===================== -->
+    <div id="opening-screen" class="screen active">
+        <div class="floating-items" id="floating-items"></div>
+        <div class="opening-content">
+            <div class="store-logo">
+                <div class="store-icon">&#127961;</div>
+                <h1 class="store-title">Convenience Store</h1>
+                <p class="store-subtitle">Your one-stop neighborhood shop</p>
+            </div>
+            <button id="start-btn" class="start-button">
+                <span class="start-label">START</span>
+            </button>
+            <p class="opening-hint">Click START to open the store</p>
+        </div>
+    </div>
+
+    <!-- ===================== AUTH SCREEN ===================== -->
+    <div id="auth-screen" class="screen">
+        <div class="auth-container">
+            <div class="status-sign status-closed">CLOSE!</div>
+            <div class="auth-box">
+                <h2 class="auth-title">Welcome!</h2>
+                <div class="auth-tabs">
+                    <button class="tab-btn active" data-tab="login">Login</button>
+                    <button class="tab-btn" data-tab="register">Register</button>
+                </div>
+
+                <form id="login-form" class="auth-form active">
+                    <div class="form-group">
+                        <label for="login-username">Username</label>
+                        <input type="text" id="login-username" required autocomplete="username" maxlength="40">
+                        <span class="error-msg" id="login-username-error"></span>
+                    </div>
+                    <div class="form-group">
+                        <label for="login-password">Password</label>
+                        <input type="password" id="login-password" required autocomplete="current-password" maxlength="100">
+                        <span class="error-msg" id="login-password-error"></span>
+                    </div>
+                    <div class="honeypot-wrap">
+                        <label for="login-hp">Leave this empty</label>
+                        <input type="text" id="login-hp" tabindex="-1" autocomplete="off">
+                    </div>
+                    <button type="submit" class="auth-btn">Login</button>
+                    <div class="auth-message" id="login-message"></div>
+                </form>
+
+                <form id="register-form" class="auth-form">
+                    <div class="form-group">
+                        <label for="reg-username">Username</label>
+                        <input type="text" id="reg-username" required autocomplete="username" minlength="3" maxlength="40">
+                        <span class="error-msg" id="reg-username-error"></span>
+                    </div>
+                    <div class="form-group">
+                        <label for="reg-password">Password</label>
+                        <input type="password" id="reg-password" required autocomplete="new-password" minlength="6" maxlength="100">
+                        <span class="error-msg" id="reg-password-error"></span>
+                    </div>
+                    <div class="form-group">
+                        <label for="reg-confirm">Confirm Password</label>
+                        <input type="password" id="reg-confirm" required autocomplete="new-password" maxlength="100">
+                        <span class="error-msg" id="reg-confirm-error"></span>
+                    </div>
+                    <div class="honeypot-wrap">
+                        <label for="reg-hp">Leave this empty</label>
+                        <input type="text" id="reg-hp" tabindex="-1" autocomplete="off">
+                    </div>
+                    <button type="submit" class="auth-btn">Create Account</button>
+                    <div class="auth-message" id="register-message"></div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===================== STORE SCREEN ===================== -->
+    <div id="store-screen" class="screen">
+        <header class="store-header">
+            <div class="brand">
+                <span class="store-emblem">&#127961;</span>
+                <div class="brand-text">
+                    <h2 class="header-title">My Store</h2>
+                    <div class="status-sign status-open">OPEN!</div>
+                </div>
+            </div>
+
+            <nav class="main-nav" id="main-nav">
+                <button class="nav-btn active" data-view="products">Products</button>
+                <button class="nav-btn" data-view="notes">Notes</button>
+                <button class="nav-btn" data-view="owed">Owed / Utang</button>
+                <button class="nav-btn" data-view="lists">List of Products</button>
+            </nav>
+
+            <div class="header-right">
+                <span class="welcome-user" id="welcome-user"></span>
+                <button id="signout-btn" class="signout-btn">Sign Out</button>
+            </div>
+        </header>
+
+        <main class="store-main">
+
+            <!-- ========== PRODUCTS VIEW ========== -->
+            <section id="products-view" class="view active">
+                <div class="view-header">
+                    <h3>&#128230; Product Inventory &amp; Quick-Checkout</h3>
+                    <div class="view-actions">
+                        <div class="search-box">
+                            <span class="search-icon">&#128269;</span>
+                            <input type="text" id="search-input" placeholder="Search products..." maxlength="80">
+                        </div>
+                        <button id="add-product-btn" class="add-btn">+ Add Product</button>
+                    </div>
+                </div>
+                <div id="products-container" class="panel-content products-content"></div>
+            </section>
+
+            <!-- ========== NOTES VIEW ========== -->
+            <section id="notes-view" class="view">
+                <div class="view-header">
+                    <h3>&#128221; Notes</h3>
+                </div>
+                <div id="notes-container" class="panel-content notes-content"></div>
+                <button id="notes-fab" class="fab" title="Add a floating note">+</button>
+            </section>
+
+            <!-- ========== OWED / UTANG VIEW ========== -->
+            <section id="owed-view" class="view">
+                <div class="view-header">
+                    <h3>&#128176; Debtors / People Owed (Utang Tracker)</h3>
+                    <button id="add-debt-btn" class="add-btn">+ Add Debtor</button>
+                </div>
+                <div id="debts-container" class="panel-content debts-content"></div>
+            </section>
+
+            <!-- ========== LIST OF PRODUCTS VIEW (AUTO, READ-ONLY) ========== -->
+            <section id="lists-view" class="view">
+                <div class="view-header">
+                    <h3>&#128209; List of Products</h3>
+                    <span class="auto-hint">Auto-generated from your products. Not editable.</span>
+                </div>
+                <div id="lists-container" class="panel-content lists-inventory"></div>
+            </section>
+
+        </main>
+    </div>
+
+    <!-- ===================== MODAL ===================== -->
+    <div id="modal-overlay" class="modal-overlay hidden">
+        <div id="modal" class="modal">
+            <button id="modal-close" class="modal-close">&times;</button>
+            <div id="modal-body" class="modal-body"></div>
+        </div>
+    </div>
+
+    <!-- ===================== NOTIFICATIONS ===================== -->
+    <div id="notification-container" class="notification-container"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>
