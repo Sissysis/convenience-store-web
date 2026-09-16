@@ -164,6 +164,21 @@
             try {
                 localStorage.removeItem('cs_currentUser');
             } catch (e) { /* silent */ }
+        },
+        getRememberedUser: function () {
+            try {
+                return localStorage.getItem('cs_rememberedUser') || '';
+            } catch (e) { return ''; }
+        },
+        setRememberedUser: function (u) {
+            try {
+                localStorage.setItem('cs_rememberedUser', u);
+            } catch (e) { /* silent */ }
+        },
+        clearRememberedUser: function () {
+            try {
+                localStorage.removeItem('cs_rememberedUser');
+            } catch (e) { /* silent */ }
         }
     };
 
@@ -221,7 +236,10 @@
             $('toggle-auth').textContent = 'Login here';
         }
         $('auth-error').classList.add('hidden');
-        $('auth-username').value = '';
+        var remembered = authMode === 'login' ? DB.getRememberedUser() : '';
+        $('auth-username').value = remembered;
+        $('remember-me').checked = remembered !== '';
+        $('remember-me-wrap').classList.toggle('hidden', authMode !== 'login');
         $('auth-password').value = '';
         $('auth-honeypot').value = '';
     }
@@ -302,6 +320,11 @@
             }
             resetLoginAttempts();
             DB.setCurrentUser({ id: user.id, username: user.username });
+            if ($('remember-me').checked) {
+                DB.setRememberedUser(user.username);
+            } else {
+                DB.clearRememberedUser();
+            }
             showMainApp();
         }
     }
@@ -1318,6 +1341,8 @@
         if (user) {
             showMainApp();
         } else {
+            authMode = 'login';
+            updateAuthUI();
             $('splash-screen').classList.remove('hidden');
         }
     }
