@@ -3,12 +3,12 @@
    ============================================ */
 'use strict';
 
-var CACHE_NAME = 'cs-pwa-v3';
+var CACHE_NAME = 'cs-pwa-v4';
 var APP_SHELL = [
     './',
     './index.html',
-    './styles.css',
-    './app.js?v=3',
+    './styles.css?v=4',
+    './app.js?v=4',
     './manifest.json',
     './icons/icon-192.png',
     './icons/icon-512.png',
@@ -49,8 +49,11 @@ self.addEventListener('fetch', function (event) {
     var url = new URL(request.url);
     if (url.origin !== self.location.origin) return;
 
-    // Pages: network-first so the latest version is always shown online.
-    if (request.mode === 'navigate') {
+    // Pages + JS + CSS: network-first so fresh code always loads when online.
+    var isCode = request.mode === 'navigate' ||
+        url.pathname.endsWith('.js') ||
+        url.pathname.endsWith('.css');
+    if (isCode) {
         event.respondWith(
             fetch(request).then(function (response) {
                 if (response && response.status === 200) {
@@ -62,13 +65,17 @@ self.addEventListener('fetch', function (event) {
                 return response;
             }).catch(function () {
                 return caches.match(request).then(function (cached) {
-                    return cached || caches.match('./index.html');
-                }).catch(function () {
-                    return new Response('<h1>Offline</h1>', {
-                        status: 503,
-                        statusText: 'Offline',
-                        headers: { 'Content-Type': 'text/html' }
-                    });
+                    if (cached) return cached;
+                    if (request.mode === 'navigate') {
+                        return caches.match('./index.html').then(function (cachedIndex) {
+                            return cachedIndex || new Response('<h1>Offline</h1>', {
+                                status: 503,
+                                statusText: 'Offline',
+                                headers: { 'Content-Type': 'text/html' }
+                            });
+                        });
+                    }
+                    return new Response('', { status: 408, statusText: 'Offline' });
                 });
             })
         );

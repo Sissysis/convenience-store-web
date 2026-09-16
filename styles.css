@@ -552,122 +552,118 @@ select option {
     z-index: 999;
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 20px;
     padding: 0 24px;
     padding-top: max(env(safe-area-inset-top), 0px);
-    height: calc(60px + env(safe-area-inset-top));
-    background: rgba(13, 13, 13, 0.95);
-    backdrop-filter: blur(12px);
+    min-height: calc(64px + env(safe-area-inset-top));
+    background: rgba(13, 13, 13, 0.92);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
     border-bottom: 1px solid var(--border-subtle);
 }
 
 .nav-brand {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     font-size: 1.1rem;
     font-weight: 700;
+    letter-spacing: 0.2px;
     color: var(--text);
+    white-space: nowrap;
 }
 
 .nav-links {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
+    margin: 0 auto;
 }
 
 .nav-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 8px 16px;
+    justify-content: center;
+    gap: 7px;
+    height: 38px;
+    padding: 0 15px;
     font-size: 0.85rem;
     font-weight: 600;
     font-family: var(--font);
     color: var(--text-secondary);
     background: transparent;
-    border: none;
-    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    border-radius: 10px;
     cursor: pointer;
-    transition: var(--transition);
+    transition: color 0.18s ease, background 0.18s ease, border-color 0.18s ease;
     white-space: nowrap;
+}
+
+.nav-btn svg {
+    flex-shrink: 0;
 }
 
 .nav-btn:hover {
     color: var(--text);
-    background: rgba(255, 255, 255, 0.05);
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.nav-btn:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
 }
 
 .nav-btn.active {
     color: var(--primary-light);
     background: rgba(230, 126, 0, 0.12);
+    border-color: rgba(230, 126, 0, 0.28);
 }
 
-.nav-logout {
-    display: inline-flex;
+/* Right-side grouped actions */
+.nav-actions {
+    display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 8px 16px;
-    font-size: 0.85rem;
-    font-weight: 600;
-    font-family: var(--font);
-    color: var(--danger);
-    background: rgba(231, 76, 60, 0.08);
-    border: 1px solid rgba(231, 76, 60, 0.2);
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    transition: var(--transition);
-}
-
-.nav-logout:hover {
-    background: rgba(231, 76, 60, 0.15);
+    gap: 8px;
+    margin-left: auto;
 }
 
 .nav-backup {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 14px;
-    font-size: 0.85rem;
-    font-weight: 600;
-    font-family: var(--font);
     color: var(--text-secondary);
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    transition: var(--transition);
-    white-space: nowrap;
+    background: rgba(255, 255, 255, 0.04);
+    border-color: var(--border-subtle);
 }
 
 .nav-backup:hover {
-    background: rgba(255, 255, 255, 0.1);
     color: var(--text);
+    background: rgba(255, 255, 255, 0.08);
     border-color: var(--border);
 }
 
+.nav-logout {
+    color: #ff8a8a;
+    background: rgba(231, 76, 60, 0.08);
+    border-color: rgba(231, 76, 60, 0.18);
+}
+
+.nav-logout:hover {
+    color: #ffb3b3;
+    background: rgba(231, 76, 60, 0.15);
+    border-color: rgba(231, 76, 60, 0.35);
+}
+
 .nav-install {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 16px;
-    font-size: 0.85rem;
-    font-weight: 700;
-    font-family: var(--font);
-    color: #000;
+    color: #1a1206;
     background: linear-gradient(135deg, var(--primary-light), var(--primary));
-    border: none;
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    transition: var(--transition);
-    box-shadow: 0 2px 12px var(--primary-glow);
-    white-space: nowrap;
-    animation: pulseGlow 2s ease-in-out infinite;
+    border-color: transparent;
+    font-weight: 700;
+    box-shadow: 0 2px 10px var(--primary-glow);
 }
 
 .nav-install:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 18px var(--primary-glow);
+    color: #1a1206;
+    background: linear-gradient(135deg, var(--primary-light), var(--primary));
+    filter: brightness(1.05);
+    box-shadow: 0 3px 14px var(--primary-glow);
 }
 
 /* ============================================
@@ -1414,10 +1410,10 @@ select option {
    ============================================ */
 @media (max-width: 768px) {
     .navbar {
-        flex-wrap: wrap;
-        height: auto;
-        padding: 10px 16px;
-        gap: 8px;
+        flex-wrap: nowrap;
+        min-height: auto;
+        padding: calc(env(safe-area-inset-top) + 8px) 12px 8px;
+        gap: 10px;
     }
 
     .nav-brand {
@@ -1426,12 +1422,21 @@ select option {
 
     .nav-links {
         flex: 1;
+        min-width: 0;
         overflow-x: auto;
-        gap: 2px;
+        gap: 6px;
+        margin: 0;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+    }
+
+    .nav-links::-webkit-scrollbar {
+        display: none;
     }
 
     .nav-btn {
-        padding: 8px 10px;
+        height: 36px;
+        padding: 0 12px;
         font-size: 0.78rem;
     }
 
@@ -1439,19 +1444,20 @@ select option {
         display: none;
     }
 
-    .nav-install {
-        padding: 8px 12px;
-        font-size: 0.78rem;
+    .nav-actions {
+        gap: 6px;
+        margin-left: 0;
+        flex-shrink: 0;
     }
 
-    .nav-install svg,
-    .nav-backup svg {
-        display: none;
+    .nav-actions .nav-btn {
+        width: 38px;
+        padding: 0;
+        font-size: 0;
     }
 
-    .nav-backup {
-        padding: 8px 10px;
-        font-size: 0.78rem;
+    .nav-actions .nav-btn svg {
+        display: inline;
     }
 
     .tab-content {

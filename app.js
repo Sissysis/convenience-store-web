@@ -148,19 +148,28 @@
                 u = sessionStorage.getItem('cs_currentUser');
                 if (u) {
                     var parsed = JSON.parse(u);
-                    localStorage.setItem('cs_currentUser', u);
                     sessionStorage.removeItem('cs_currentUser');
                     return parsed;
                 }
                 return null;
             } catch (e) { return null; }
         },
-        setCurrentUser: function (u) {
+        setCurrentUser: function (u, remember) {
             try {
-                localStorage.setItem('cs_currentUser', JSON.stringify(u));
+                sessionStorage.setItem('cs_currentUser', JSON.stringify(u));
+            } catch (e) { /* silent */ }
+            try {
+                if (remember) {
+                    localStorage.setItem('cs_currentUser', JSON.stringify(u));
+                } else {
+                    localStorage.removeItem('cs_currentUser');
+                }
             } catch (e) { /* silent */ }
         },
         clearCurrentUser: function () {
+            try {
+                sessionStorage.removeItem('cs_currentUser');
+            } catch (e) { /* silent */ }
             try {
                 localStorage.removeItem('cs_currentUser');
             } catch (e) { /* silent */ }
@@ -208,6 +217,7 @@
     }
 
     function showMainApp() {
+        $('splash-screen').classList.add('hidden');
         $('auth-screen').classList.add('hidden');
         $('main-app').classList.remove('hidden');
         updateStoreBadge(true);
@@ -319,7 +329,7 @@
                 return;
             }
             resetLoginAttempts();
-            DB.setCurrentUser({ id: user.id, username: user.username });
+            DB.setCurrentUser({ id: user.id, username: user.username }, $('remember-me').checked);
             if ($('remember-me').checked) {
                 DB.setRememberedUser(user.username);
             } else {
