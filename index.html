@@ -2,171 +2,271 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta http-equiv="X-Content-Type-Options" content="nosniff">
     <meta http-equiv="X-Frame-Options" content="DENY">
-    <meta http-equiv="Referrer-Policy" content="strict-origin-when-cross-origin">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline';">
+    <meta http-equiv="X-XSS-Protection" content="1; mode=block">
+    <meta http-equiv="Referrer-Policy" content="no-referrer">
+    <meta name="description" content="Convenience Store Management System">
+    <meta name="theme-color" content="#0d0d0d">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Store">
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/png" href="icons/icon-192.png">
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
     <title>Convenience Store</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
-    <!-- ===================== INTRO SPLASH SCREEN ===================== -->
-    <div id="opening-screen" class="screen active">
+    <!-- ============ SPLASH SCREEN ============ -->
+    <div id="splash-screen" class="splash-screen">
         <div class="floating-items" id="floating-items"></div>
-        <div class="opening-content">
-            <div class="store-logo">
-                <div class="store-icon">&#127961;</div>
-                <h1 class="store-title">Convenience Store</h1>
-                <p class="store-subtitle">Your one-stop neighborhood shop</p>
+        <div class="splash-content">
+            <div class="splash-icon">
+                <svg viewBox="0 0 120 120" width="100" height="100">
+                    <rect x="15" y="45" width="90" height="60" rx="8" fill="#E67E00"/>
+                    <rect x="20" y="50" width="80" height="50" rx="4" fill="#1a1a1a"/>
+                    <polygon points="15,45 60,10 105,45" fill="#E67E00"/>
+                    <rect x="40" y="65" width="40" height="30" rx="3" fill="#E67E00" opacity="0.3"/>
+                    <text x="60" y="85" text-anchor="middle" fill="#E67E00" font-size="12" font-weight="bold">STORE</text>
+                </svg>
             </div>
-            <button id="start-btn" class="start-button">
-                <span class="start-label">START</span>
+            <h1 class="splash-title">Convenience<br><span>Store</span></h1>
+            <p class="splash-subtitle">Your friendly neighborhood shop</p>
+            <button id="start-btn" class="start-btn">START</button>
+        </div>
+    </div>
+
+    <!-- ============ AUTH SCREEN ============ -->
+    <div id="auth-screen" class="auth-screen hidden">
+        <div class="auth-card">
+            <div class="auth-store-icon">
+                <svg viewBox="0 0 80 80" width="60" height="60">
+                    <rect x="10" y="30" width="60" height="40" rx="6" fill="#E67E00"/>
+                    <polygon points="10,30 40,5 70,30" fill="#E67E00"/>
+                    <rect x="25" y="42" width="30" height="22" rx="3" fill="#1a1a1a"/>
+                </svg>
+            </div>
+            <h2 id="auth-title">Login</h2>
+            <p id="auth-subtitle">Welcome back to your store!</p>
+            <form id="auth-form" novalidate>
+                <div class="form-group">
+                    <input type="text" id="auth-username" placeholder="Username" required autocomplete="username">
+                </div>
+                <div class="form-group">
+                    <input type="password" id="auth-password" placeholder="Password" required autocomplete="current-password">
+                </div>
+                <input type="text" id="auth-honeypot" class="honeypot" tabindex="-1" autocomplete="off">
+                <button type="submit" id="auth-submit" class="btn-primary btn-full">Login</button>
+            </form>
+            <p class="auth-toggle">Don't have an account? <a href="#" id="toggle-auth">Register here</a></p>
+            <div id="auth-error" class="auth-error hidden"></div>
+        </div>
+    </div>
+
+    <!-- ============ MAIN APP ============ -->
+    <div id="main-app" class="main-app hidden">
+
+        <!-- Store Status Badge -->
+        <div id="store-badge" class="store-badge badge-open">
+            <span class="badge-dot"></span>
+            OPEN!
+        </div>
+
+        <!-- Navbar -->
+        <nav id="navbar" class="navbar">
+            <div class="nav-brand">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#E67E00" stroke-width="2">
+                    <path d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 100 4 2 2 0 000-4z"/>
+                </svg>
+                <span>Store</span>
+            </div>
+            <div class="nav-links">
+                <button class="nav-btn active" data-tab="products">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+                    Products
+                </button>
+                <button class="nav-btn" data-tab="notes">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                    Notes
+                </button>
+                <button class="nav-btn" data-tab="owed">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+                    Owed
+                </button>
+                <button class="nav-btn" data-tab="list">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                    List
+                </button>
+            </div>
+            <button class="nav-logout" id="logout-btn">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16,17 21,12 16,7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                Logout
             </button>
-            <p class="opening-hint">Click START to open the store</p>
-        </div>
-    </div>
+        </nav>
 
-    <!-- ===================== AUTH SCREEN ===================== -->
-    <div id="auth-screen" class="screen">
-        <div class="auth-container">
-            <div class="status-sign status-closed">CLOSE!</div>
-            <div class="auth-box">
-                <h2 class="auth-title">Welcome!</h2>
-                <div class="auth-tabs">
-                    <button class="tab-btn active" data-tab="login">Login</button>
-                    <button class="tab-btn" data-tab="register">Register</button>
+        <!-- ===== PRODUCTS TAB ===== -->
+        <div id="tab-products" class="tab-content active">
+            <div class="tab-header">
+                <div class="search-wrapper">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#999" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    <input type="text" id="search-products" placeholder="Search products by name...">
                 </div>
+                <button id="add-product-btn" class="btn-primary">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    Add Product
+                </button>
+            </div>
+            <div id="products-grid" class="products-grid"></div>
+            <div id="no-products" class="empty-state hidden">
+                <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="#555" stroke-width="1"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+                <p>No products yet. Add your first product!</p>
+            </div>
+        </div>
 
-                <form id="login-form" class="auth-form active">
-                    <div class="form-group">
-                        <label for="login-username">Username</label>
-                        <input type="text" id="login-username" required autocomplete="username" maxlength="40">
-                        <span class="error-msg" id="login-username-error"></span>
-                    </div>
-                    <div class="form-group">
-                        <label for="login-password">Password</label>
-                        <input type="password" id="login-password" required autocomplete="current-password" maxlength="100">
-                        <span class="error-msg" id="login-password-error"></span>
-                    </div>
-                    <div class="honeypot-wrap">
-                        <label for="login-hp">Leave this empty</label>
-                        <input type="text" id="login-hp" tabindex="-1" autocomplete="off">
-                    </div>
-                    <button type="submit" class="auth-btn">Login</button>
-                    <div class="auth-message" id="login-message"></div>
-                </form>
+        <!-- ===== NOTES TAB ===== -->
+        <div id="tab-notes" class="tab-content hidden">
+            <div id="notes-grid" class="notes-grid"></div>
+            <div id="no-notes" class="empty-state hidden">
+                <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="#555" stroke-width="1"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
+                <p>No notes yet. Create one!</p>
+            </div>
+            <button id="floating-note-btn" class="floating-note-btn" title="Add Note">
+                <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </button>
+        </div>
 
-                <form id="register-form" class="auth-form">
-                    <div class="form-group">
-                        <label for="reg-username">Username</label>
-                        <input type="text" id="reg-username" required autocomplete="username" minlength="3" maxlength="40">
-                        <span class="error-msg" id="reg-username-error"></span>
-                    </div>
-                    <div class="form-group">
-                        <label for="reg-password">Password</label>
-                        <input type="password" id="reg-password" required autocomplete="new-password" minlength="6" maxlength="100">
-                        <span class="error-msg" id="reg-password-error"></span>
-                    </div>
-                    <div class="form-group">
-                        <label for="reg-confirm">Confirm Password</label>
-                        <input type="password" id="reg-confirm" required autocomplete="new-password" maxlength="100">
-                        <span class="error-msg" id="reg-confirm-error"></span>
-                    </div>
-                    <div class="honeypot-wrap">
-                        <label for="reg-hp">Leave this empty</label>
-                        <input type="text" id="reg-hp" tabindex="-1" autocomplete="off">
-                    </div>
-                    <button type="submit" class="auth-btn">Create Account</button>
-                    <div class="auth-message" id="register-message"></div>
-                </form>
+        <!-- ===== OWED TAB ===== -->
+        <div id="tab-owed" class="tab-content hidden">
+            <div class="owed-form-card">
+                <h3>Add Utang / Debt</h3>
+                <div class="form-group">
+                    <label for="debtor-name">Customer Name <span class="required">*</span></label>
+                    <input type="text" id="debtor-name" placeholder="Enter customer name" required>
+                </div>
+                <div class="form-group">
+                    <label>Products</label>
+                    <div id="debtor-items" class="debtor-items"></div>
+                    <button id="add-debtor-item-btn" class="btn-secondary">+ Add Item</button>
+                </div>
+                <div class="debtor-total-display">
+                    Total: <span id="debtor-total-amount">₱0.00</span>
+                </div>
+                <button id="save-debtor-btn" class="btn-primary btn-full">Save Debt</button>
+            </div>
+            <div id="debtors-list" class="debtors-list"></div>
+            <div id="no-debtors" class="empty-state hidden">
+                <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="#555" stroke-width="1"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+                <p>No debts recorded yet.</p>
+            </div>
+        </div>
+
+        <!-- ===== LIST OF PRODUCTS TAB ===== -->
+        <div id="tab-list" class="tab-content hidden">
+            <div class="list-header">
+                <h3>List of Products</h3>
+                <span id="product-count" class="product-count"></span>
+            </div>
+            <div id="product-list-table" class="product-list-table"></div>
+            <div id="no-list" class="empty-state hidden">
+                <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="#555" stroke-width="1"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                <p>No products to display.</p>
             </div>
         </div>
     </div>
 
-    <!-- ===================== STORE SCREEN ===================== -->
-    <div id="store-screen" class="screen">
-        <header class="store-header">
-            <div class="brand">
-                <span class="store-emblem">&#127961;</span>
-                <div class="brand-text">
-                    <h2 class="header-title">My Store</h2>
-                    <div class="status-sign status-open">OPEN!</div>
+    <!-- ============ PRODUCT MODAL ============ -->
+    <div id="product-modal" class="modal hidden">
+        <div class="modal-overlay" data-close="product-modal"></div>
+        <div class="modal-card">
+            <h3 id="product-modal-title">Add New Product</h3>
+            <form id="product-form" novalidate>
+                <div class="form-group">
+                    <label for="product-name">Product Name <span class="required">*</span></label>
+                    <input type="text" id="product-name" placeholder="e.g. Coke 500ml" required maxlength="100">
                 </div>
-            </div>
-
-            <nav class="main-nav" id="main-nav">
-                <button class="nav-btn active" data-view="products">Products</button>
-                <button class="nav-btn" data-view="notes">Notes</button>
-                <button class="nav-btn" data-view="owed">Owed / Utang</button>
-                <button class="nav-btn" data-view="lists">List of Products</button>
-            </nav>
-
-            <div class="header-right">
-                <span class="welcome-user" id="welcome-user"></span>
-                <button id="signout-btn" class="signout-btn">Sign Out</button>
-            </div>
-        </header>
-
-        <main class="store-main">
-
-            <!-- ========== PRODUCTS VIEW ========== -->
-            <section id="products-view" class="view active">
-                <div class="view-header">
-                    <h3>&#128230; Product Inventory &amp; Quick-Checkout</h3>
-                    <div class="view-actions">
-                        <div class="search-box">
-                            <span class="search-icon">&#128269;</span>
-                            <input type="text" id="search-input" placeholder="Search products..." maxlength="80">
-                        </div>
-                        <button id="add-product-btn" class="add-btn">+ Add Product</button>
-                    </div>
+                <div class="form-group">
+                    <label for="product-price">Price (₱) <span class="required">*</span></label>
+                    <input type="number" id="product-price" placeholder="0.00" step="0.01" min="0.01" required>
                 </div>
-                <div id="products-container" class="panel-content products-content"></div>
-            </section>
-
-            <!-- ========== NOTES VIEW ========== -->
-            <section id="notes-view" class="view">
-                <div class="view-header">
-                    <h3>&#128221; Notes</h3>
+                <div class="form-group">
+                    <label for="product-quantity">Quantity <span class="required">*</span></label>
+                    <input type="number" id="product-quantity" placeholder="0" min="0" required>
                 </div>
-                <div id="notes-container" class="panel-content notes-content"></div>
-                <button id="notes-fab" class="fab" title="Add a floating note">+</button>
-            </section>
-
-            <!-- ========== OWED / UTANG VIEW ========== -->
-            <section id="owed-view" class="view">
-                <div class="view-header">
-                    <h3>&#128176; Debtors / People Owed (Utang Tracker)</h3>
-                    <button id="add-debt-btn" class="add-btn">+ Add Debtor</button>
+                <div class="modal-actions">
+                    <button type="button" id="cancel-product" class="btn-cancel">Cancel</button>
+                    <button type="submit" id="product-submit-btn" class="btn-primary">Add Product</button>
                 </div>
-                <div id="debts-container" class="panel-content debts-content"></div>
-            </section>
-
-            <!-- ========== LIST OF PRODUCTS VIEW (AUTO, READ-ONLY) ========== -->
-            <section id="lists-view" class="view">
-                <div class="view-header">
-                    <h3>&#128209; List of Products</h3>
-                    <span class="auto-hint">Auto-generated from your products. Not editable.</span>
-                </div>
-                <div id="lists-container" class="panel-content lists-inventory"></div>
-            </section>
-
-        </main>
-    </div>
-
-    <!-- ===================== MODAL ===================== -->
-    <div id="modal-overlay" class="modal-overlay hidden">
-        <div id="modal" class="modal">
-            <button id="modal-close" class="modal-close">&times;</button>
-            <div id="modal-body" class="modal-body"></div>
+            </form>
         </div>
     </div>
 
-    <!-- ===================== NOTIFICATIONS ===================== -->
-    <div id="notification-container" class="notification-container"></div>
+    <!-- ============ NOTE MODAL ============ -->
+    <div id="note-modal" class="modal hidden">
+        <div class="modal-overlay" data-close="note-modal"></div>
+        <div class="modal-card">
+            <h3 id="note-modal-title">Add Note</h3>
+            <form id="note-form" novalidate>
+                <div class="form-group">
+                    <label for="note-content">Note <span class="required">*</span></label>
+                    <textarea id="note-content" placeholder="Write your note here..." rows="5" required maxlength="500"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Color</label>
+                    <div class="color-picker" id="color-picker">
+                        <button type="button" class="color-swatch active" data-color="#E67E00" style="background:#E67E00" title="Orange"></button>
+                        <button type="button" class="color-swatch" data-color="#FFD700" style="background:#FFD700" title="Gold"></button>
+                        <button type="button" class="color-swatch" data-color="#FF4444" style="background:#FF4444" title="Red"></button>
+                        <button type="button" class="color-swatch" data-color="#44BB44" style="background:#44BB44" title="Green"></button>
+                        <button type="button" class="color-swatch" data-color="#5599FF" style="background:#5599FF" title="Blue"></button>
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" id="cancel-note" class="btn-cancel">Cancel</button>
+                    <button type="submit" class="btn-primary">Save Note</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ============ LOW STOCK ALERT ============ -->
+    <div id="low-stock-modal" class="modal hidden">
+        <div class="modal-overlay"></div>
+        <div class="modal-card modal-alert">
+            <div class="alert-icon">⚠️</div>
+            <h3>Low Stock Alert</h3>
+            <p id="low-stock-message"></p>
+            <div class="modal-actions">
+                <button id="close-low-stock" class="btn-primary">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ CONFIRM MODAL ============ -->
+    <div id="confirm-modal" class="modal hidden">
+        <div class="modal-overlay"></div>
+        <div class="modal-card modal-alert">
+            <h3 id="confirm-title">Confirm</h3>
+            <p id="confirm-message"></p>
+            <div class="modal-actions">
+                <button id="confirm-cancel" class="btn-cancel">Cancel</button>
+                <button id="confirm-ok" class="btn-primary">Confirm</button>
+            </div>
+        </div>
+    </div>
 
     <script src="app.js"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function () {
+                navigator.serviceWorker.register('sw.js').catch(function (err) {
+                    console.warn('Service worker registration failed:', err);
+                });
+            });
+        }
+    </script>
 </body>
 </html>

@@ -1,1801 +1,1041 @@
-/* ============================================================
-   CONVENIENCE STORE - APPLICATION LOGIC
-   All data stored locally. No external APIs or keys used.
-   ============================================================ */
+/* ============================================
+   CONVENIENCE STORE - APP.JS
+   ============================================ */
+(function () {
+    'use strict';
 
-'use strict';
-
-/* ============================================================
-   SECURITY MODULE
-   ============================================================ */
-
-const Security = (function () {
-
-    if (window.location.protocol === 'http:' && !/localhost|127\.0\.0\.1|^file:/.test(window.location.host || 'file:')) {
-        try { window.location.protocol = 'https:'; } catch (e) { /* local usage */ }
-    }
-
-    // Pure-JS SHA-256 fallback (used if crypto.subtle is unavailable)
-    function sha256Sync(str) {
-        function rightRotate(value, amount) {
-            return (value >>> amount) | (value << (32 - amount));
-        }
-        const mathPow = Math.pow;
-        const maxWord = mathPow(2, 32);
-        let result = '';
-        const words = [];
-        const asciiBitLength = str.length * 8;
-        let hash = [];
-        let k = [];
-        let primeCounter = 0;
-        const isComposite = {};
-        for (let candidate = 2; primeCounter < 64; candidate++) {
-            if (!isComposite[candidate]) {
-                for (let i = 0; i < 313; i += candidate) {
-                    isComposite[i] = candidate;
-                }
-                hash[primeCounter] = (mathPow(candidate, 0.5) * maxWord) | 0;
-                k[primeCounter++] = (mathPow(candidate, 1 / 3) * maxWord) | 0;
-            }
-        }
-        str += '\x80';
-        while (str.length % 64 - 56) str += '\x00';
-        for (let i = 0; i < str.length; i++) {
-            const j = str.charCodeAt(i);
-            if (j >> 8) return '';
-            words[i >> 2] |= j << ((3 - i) % 4) * 8;
-        }
-        words[words.length] = ((asciiBitLength / maxWord) | 0);
-        words[words.length] = asciiBitLength;
-        for (let j = 0; j < words.length;) {
-            const w = words.slice(j, j += 16);
-            const oldHash = hash;
-            hash = hash.slice(0, 8);
-            for (let i = 0; i < 64; i++) {
-                const w15 = w[i - 15];
-                const w2 = w[i - 2];
-                const a = hash[0];
-                const e = hash[4];
-                const temp1 = hash[7]
-                    + (rightRotate(e, 6) ^ rightRotate(e, 11) ^ rightRotate(e, 25))
-                    + ((e & hash[5]) ^ (~e & hash[6]))
-                    + k[i]
-                    + (w[i] = (i < 16) ? w[i] : (
-                        w[i - 16]
-                        + (rightRotate(w15, 7) ^ rightRotate(w15, 18) ^ (w15 >>> 3))
-                        + w[i - 7]
-                        + (rightRotate(w2, 17) ^ rightRotate(w2, 19) ^ (w2 >>> 10))
-                    ) | 0);
-                const temp2 = (rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22))
-                    + ((a & hash[1]) ^ (a & hash[2]) ^ (hash[1] & hash[2]));
-                hash = [(temp1 + temp2) | 0].concat(hash);
-                hash[4] = (hash[4] + temp1) | 0;
-            }
-            for (let i = 0; i < 8; i++) {
-                hash[i] = (hash[i] + oldHash[i]) | 0;
-            }
-        }
-        for (let i = 0; i < 8; i++) {
-            for (let j = 3; j + 1; j--) {
-                const b = (hash[i] >> (j * 8)) & 255;
-                result += ((b < 16) ? 0 : '') + b.toString(16);
-            }
-        }
-        return result;
-    }
-
-    async function sha256(text) {
-        try {
-            if (window.crypto && window.crypto.subtle && window.crypto.subtle.digest) {
-                const encoder = new TextEncoder();
-                const data = encoder.encode(text);
-                const hashBuffer = await window.crypto.subtle.digest('SHA-256', data);
-                return Array.from(new Uint8Array(hashBuffer))
-                    .map(b => b.toString(16).padStart(2, '0'))
-                    .join('');
-            }
-        } catch (e) { /* fall through to JS impl */ }
-        return sha256Sync(text);
-    }
-
-    function genRand(bytes) {
-        if (window.crypto && window.crypto.getRandomValues) {
-            const arr = new Uint8Array(bytes);
-            window.crypto.getRandomValues(arr);
-            return Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
-        }
-        let out = '';
-        for (let i = 0; i < bytes; i++) {
-            out += Math.floor(Math.random() * 256).toString(16).padStart(2, '0');
-        }
-        return out;
-    }
-
-    async function hashPassword(password, salt) {
-        let hash = salt + '::' + password;
-        for (let i = 0; i < 10; i++) {
-            hash = await sha256(hash);
-        }
-        return hash;
-    }
-
-    function generateSalt() {
-        return genRand(16);
-    }
-
-    function generateId() {
-        return Date.now().toString(36) + '-' + genRand(8);
-    }
+    /* ---------- SECURITY UTILITIES ---------- */
+    const MAX_LOGIN_ATTEMPTS = 5;
+    const LOGIN_LOCKOUT_MS = 5 * 60 * 1000;
+    const MAX_INPUT_LENGTH = 500;
+    const MAX_NAME_LENGTH = 100;
 
     function escapeHtml(str) {
         if (typeof str !== 'string') return '';
-        const div = document.createElement('div');
-        div.textContent = str;
+        var div = document.createElement('div');
+        div.appendChild(document.createTextNode(str));
         return div.innerHTML;
     }
 
-    function sanitize(value, maxLen) {
-        if (typeof value !== 'string') return '';
-        value = value.trim();
-        if (maxLen && value.length > maxLen) value = value.slice(0, maxLen);
-        return value.replace(/[<>]/g, '');
+    function sanitize(str) {
+        if (typeof str !== 'string') return '';
+        return str.replace(/[<>&"'\\/]/g, '').trim().substring(0, MAX_INPUT_LENGTH);
     }
 
-    function isValidUsername(name) {
-        return /^[a-zA-Z0-9_ .\-]{3,40}$/.test(name);
+    function sanitizeName(str) {
+        if (typeof str !== 'string') return '';
+        return str.replace(/[<>&"'\\/]/g, '').trim().substring(0, MAX_NAME_LENGTH);
     }
 
-    function isValidNumber(value) {
-        const num = Number(value);
-        return Number.isFinite(num) && num >= 0;
+    function validateNumber(val, min, max) {
+        var n = parseFloat(val);
+        if (isNaN(n)) return null;
+        if (min !== undefined && n < min) return null;
+        if (max !== undefined && n > max) return null;
+        return n;
     }
 
-    function toNumber(value) {
-        const num = Number(value);
-        return Number.isFinite(num) ? num : 0;
+    async function hashPassword(password) {
+        var encoder = new TextEncoder();
+        var data = encoder.encode(password + '_store_salt_2024');
+        var hashBuffer = await crypto.subtle.digest('SHA-256', data);
+        var hashArray = Array.from(new Uint8Array(hashBuffer));
+        return hashArray.map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
     }
 
-    return {
-        hashPassword, generateSalt, generateId,
-        escapeHtml, sanitize, isValidUsername,
-        isValidNumber, toNumber
-    };
-})();
-
-/* ============================================================
-   DATA STORAGE (localStorage, scoped per user)
-   ============================================================ */
-
-const Store = (function () {
-
-    const PREFIX = 'convstore_';
-
-    function get(key, fallback) {
+    function getLoginAttempts() {
         try {
-            const raw = localStorage.getItem(PREFIX + key);
-            return raw === null ? fallback : JSON.parse(raw);
+            var data = sessionStorage.getItem('loginAttempts');
+            return data ? JSON.parse(data) : { count: 0, firstAttempt: 0 };
         } catch (e) {
-            return fallback;
+            return { count: 0, firstAttempt: 0 };
         }
     }
 
-    function set(key, value) {
+    function setLoginAttempts(attempts) {
         try {
-            localStorage.setItem(PREFIX + key, JSON.stringify(value));
-        } catch (e) {
-            if (typeof UI !== 'undefined') {
-                UI.notify('Storage is full or unavailable.', 'error');
+            sessionStorage.setItem('loginAttempts', JSON.stringify(attempts));
+        } catch (e) { /* silent */ }
+    }
+
+    function checkRateLimit() {
+        var attempts = getLoginAttempts();
+        var now = Date.now();
+        if (attempts.count >= MAX_LOGIN_ATTEMPTS) {
+            var elapsed = now - attempts.firstAttempt;
+            if (elapsed < LOGIN_LOCKOUT_MS) {
+                var remaining = Math.ceil((LOGIN_LOCKOUT_MS - elapsed) / 60000);
+                return { blocked: true, minutes: remaining };
             }
+            setLoginAttempts({ count: 0, firstAttempt: 0 });
         }
+        return { blocked: false };
     }
 
-    function remove(key) {
-        localStorage.removeItem(PREFIX + key);
-    }
-
-    return { get, set, remove };
-})();
-
-/* ============================================================
-   SERVER API (shared data sync backend)
-   Falls back to local-only mode when the server is unreachable.
-   ============================================================ */
-
-const API = (function () {
-
-    let up = null;          // null = unknown, true/false after first check
-    let inflight = null;    // in-flight health promise
-    const TIMEOUT = 6000;
-
-    function isUp() {
-        return up === true;
-    }
-
-    function ping() {
-        if (up !== null) return Promise.resolve(up);
-        if (inflight) return inflight;
-        inflight = req('/api/health').then(r => {
-            up = r.status === 200 && r.data.ok === true;
-            return up;
-        }).finally(() => { inflight = null; });
-        return inflight;
-    }
-
-    async function req(path, opts) {
-        opts = opts || {};
-        const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-        const timer = ctrl ? setTimeout(() => ctrl.abort(), TIMEOUT) : null;
-        const headers = { 'Content-Type': 'application/json' };
-        if (opts.token) headers['Authorization'] = 'Bearer ' + opts.token;
-        try {
-            const res = await window.fetch(path, {
-                method: opts.method || 'GET',
-                headers: headers,
-                body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-                signal: ctrl ? ctrl.signal : undefined,
-                cache: 'no-store'
-            });
-            const data = await res.json().catch(() => ({}));
-            return { status: res.status, data: data };
-        } catch (err) {
-            return { status: 0, data: {} };
-        } finally {
-            if (timer) clearTimeout(timer);
-        }
-    }
-
-    return { req, ping, isUp };
-})();
-
-/* ============================================================
-   AUTH MODULE
-   ============================================================ */
-
-const Auth = (function () {
-
-    const SESSION_KEY = 'session';
-    const LOGIN_ATTEMPTS_KEY = 'login_attempts';
-    const MAX_ATTEMPTS = 5;
-    const LOCK_MS = 15 * 60 * 1000;
-
-    function getUsers() {
-        return Store.get('users', {});
-    }
-
-    function saveUsers(users) {
-        Store.set('users', users);
-    }
-
-    function getUserData(username) {
-        return Store.get('user_' + username.toLowerCase(), null);
-    }
-
-    function saveUserData(username, data) {
-        Store.set('user_' + username.toLowerCase(), data);
-    }
-
-    function getCurrentUser() {
-        const session = Store.get(SESSION_KEY, null);
-        if (!session) return null;
-        const users = getUsers();
-        return users[session.userId] ? session : null;
-    }
-
-    function checkLocked(username) {
-        const attempts = Store.get(LOGIN_ATTEMPTS_KEY, {});
-        const record = attempts[username.toLowerCase()] || { count: 0, ts: 0 };
-        return record.count >= MAX_ATTEMPTS && (Date.now() - record.ts) < LOCK_MS;
-    }
-
-    function remainingLockTime(username) {
-        const attempts = Store.get(LOGIN_ATTEMPTS_KEY, {});
-        const record = attempts[username.toLowerCase()] || { count: 0, ts: 0 };
-        const remain = LOCK_MS - (Date.now() - record.ts);
-        return remain > 0 && record.count >= MAX_ATTEMPTS ? remain : 0;
-    }
-
-    function recordFailedAttempt(username) {
-        const attempts = Store.get(LOGIN_ATTEMPTS_KEY, {});
-        const key = username.toLowerCase();
-        const record = attempts[key] || { count: 0, ts: 0 };
-        if (Date.now() - record.ts > LOCK_MS) {
-            record.count = 1;
+    function recordFailedLogin() {
+        var attempts = getLoginAttempts();
+        var now = Date.now();
+        if (attempts.count === 0 || (now - attempts.firstAttempt > LOGIN_LOCKOUT_MS)) {
+            setLoginAttempts({ count: 1, firstAttempt: now });
         } else {
-            record.count += 1;
+            attempts.count++;
+            setLoginAttempts(attempts);
         }
-        record.ts = Date.now();
-        attempts[key] = record;
-        Store.set(LOGIN_ATTEMPTS_KEY, attempts);
-        return record.count;
     }
 
-    function resetAttempts(username) {
-        const attempts = Store.get(LOGIN_ATTEMPTS_KEY, {});
-        attempts[username.toLowerCase()] = { count: 0, ts: 0 };
-        Store.set(LOGIN_ATTEMPTS_KEY, attempts);
+    function resetLoginAttempts() {
+        setLoginAttempts({ count: 0, firstAttempt: 0 });
     }
 
-    async function register(username, password) {
-        const users = getUsers();
-        const existing = Object.values(users).find(u => u.username.toLowerCase() === username.toLowerCase());
-        if (existing) {
-            return { ok: false, message: 'Username is already taken.' };
-        }
-
-        const salt = Security.generateSalt();
-        const hash = await Security.hashPassword(password, salt);
-        const userId = Security.generateId();
-
-        const user = {
-            id: userId,
-            username: username,
-            usernameLower: username.toLowerCase(),
-            salt: salt,
-            hash: hash,
-            createdAt: Date.now()
-        };
-
-        // When the server is reachable, create the account there first so it
-        // exists on every device. The shared store data is NOT touched here.
-        const serverUp = await API.ping();
-        if (serverUp) {
-            const r = await API.req('/api/register', {
-                method: 'POST',
-                body: { username: user.username, salt: salt, hash: hash, rounds: 10 }
-            });
-            if (r.status === 409) {
-                return { ok: false, message: 'Username is already taken.' };
-            }
-            if (r.status !== 200) {
-                return { ok: false, message: 'Could not reach the server right now. Please try again.' };
-            }
-        }
-
-        users[userId] = user;
-        saveUsers(users);
-        saveUserDataLocal(username, { products: [], notes: [], lists: [], debts: [] });
-
-        return { ok: true, user: user };
+    function generateId() {
+        return Date.now().toString(36) + Math.random().toString(36).substring(2, 8);
     }
 
-    async function login(username, password) {
-        if (checkLocked(username)) {
-            const mins = Math.ceil(remainingLockTime(username) / 60000);
-            return { ok: false, message: 'Too many attempts. Try again in ~' + mins + ' min.' };
-        }
-
-        const users = getUsers();
-        const localAccount = Object.values(users).find(u => u.username.toLowerCase() === username.toLowerCase());
-
-        const serverUp = await API.ping();
-
-        /* -------- Server sync path -------- */
-        if (serverUp) {
-            const saltRes = await API.req('/api/salt?username=' + encodeURIComponent(username));
-
-            if (saltRes.status === 200 && saltRes.data.salt) {
-                const hash = await Security.hashPassword(password, saltRes.data.salt);
-                const lg = await API.req('/api/login', {
-                    method: 'POST',
-                    body: { username: username, salt: saltRes.data.salt, hash: hash, rounds: 10 }
-                });
-                if (lg.status !== 200 || !lg.data.token) {
-                    recordFailedAttempt(username);
-                    return { ok: false, message: lg.data.error || 'Login failed.' };
-                }
-                resetAttempts(username);
-                return finishServerLogin(username, saltRes.data.salt, hash, lg.data, localAccount, false);
-            }
-
-            // Server has no account yet -> migrate this local account to the server
-            if (saltRes.status === 404 && localAccount) {
-                const localHash = await Security.hashPassword(password, localAccount.salt);
-                if (localHash !== localAccount.hash) {
-                    const count = recordFailedAttempt(username);
-                    const left = MAX_ATTEMPTS - count;
-                    return { ok: false, message: 'Incorrect password.' + (left > 0 ? ' Attempts left: ' + left : ' Account temporarily locked.') };
-                }
-
-                const reg = await API.req('/api/register', {
-                    method: 'POST',
-                    body: { username: localAccount.username, salt: localAccount.salt, hash: localAccount.hash, rounds: 10 }
-                });
-                if (reg.status !== 200) {
-                    return { ok: false, message: 'Could not reach the server right now. Please try again.' };
-                }
-
-                const lg = await API.req('/api/login', {
-                    method: 'POST',
-                    body: { username: localAccount.username, salt: localAccount.salt, hash: localAccount.hash, rounds: 10 }
-                });
-                if (lg.status !== 200 || !lg.data.token) {
-                    return { ok: false, message: 'Login failed.' };
-                }
-
-                resetAttempts(username);
-                return finishServerLogin(username, localAccount.salt, localAccount.hash, lg.data, localAccount, true);
-            }
-        }
-
-        /* -------- Local-only / offline fallback path -------- */
-        if (!localAccount) {
-            recordFailedAttempt(username);
-            return { ok: false, message: 'No account found with that username.' };
-        }
-
-        const hash = await Security.hashPassword(password, localAccount.salt);
-        if (hash !== localAccount.hash) {
-            const count = recordFailedAttempt(username);
-            const left = MAX_ATTEMPTS - count;
-            return {
-                ok: false,
-                message: 'Incorrect password.' + (left > 0 ? ' Attempts left: ' + left : ' Account temporarily locked.')
-            };
-        }
-
-        resetAttempts(username);
-        Store.set(SESSION_KEY, { userId: localAccount.id, username: localAccount.username, loginAt: Date.now() });
-        return { ok: true, user: localAccount };
+    function capitalizeFirst(str) {
+        if (!str) return '';
+        return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
     }
 
-    function finishServerLogin(username, salt, hash, payload, localAccount, migrated) {
-        const serverUser = payload.user || { username: username, id: username };
-        const serverData = payload.data || null;
+    function capitalizeWords(str) {
+        if (!str) return '';
+        return str.split(' ').map(function (w) {
+            if (!w) return w;
+            return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+        }).join(' ');
+    }
 
-        let localUser = localAccount;
-        if (!localUser) {
-            localUser = {
-                id: serverUser.id,
-                username: serverUser.username,
-                usernameLower: username.toLowerCase(),
-                salt: salt,
-                hash: hash,
+    function formatPrice(price) {
+        return '₱' + parseFloat(price).toFixed(2);
+    }
+
+    function formatDate(ts) {
+        var d = new Date(ts);
+        var month = (d.getMonth() + 1).toString().padStart(2, '0');
+        var day = d.getDate().toString().padStart(2, '0');
+        var year = d.getFullYear();
+        var hours = d.getHours().toString().padStart(2, '0');
+        var mins = d.getMinutes().toString().padStart(2, '0');
+        return month + '/' + day + '/' + year + ' ' + hours + ':' + mins;
+    }
+
+    /* ---------- DATA MANAGEMENT ---------- */
+    var DB = {
+        _get: function (key) {
+            try {
+                var data = localStorage.getItem('cs_' + key);
+                return data ? JSON.parse(data) : null;
+            } catch (e) {
+                return null;
+            }
+        },
+        _set: function (key, value) {
+            try {
+                localStorage.setItem('cs_' + key, JSON.stringify(value));
+            } catch (e) { /* silent */ }
+        },
+        getUsers: function () { return this._get('users') || []; },
+        setUsers: function (u) { this._set('users', u); },
+        getProducts: function () { return this._get('products') || []; },
+        setProducts: function (p) { this._set('products', p); },
+        getNotes: function () { return this._get('notes') || []; },
+        setNotes: function (n) { this._set('notes', n); },
+        getDebtors: function () { return this._get('debtors') || []; },
+        setDebtors: function (d) { this._set('debtors', d); },
+        getCurrentUser: function () {
+            try {
+                var u = sessionStorage.getItem('cs_currentUser');
+                return u ? JSON.parse(u) : null;
+            } catch (e) { return null; }
+        },
+        setCurrentUser: function (u) {
+            try {
+                sessionStorage.setItem('cs_currentUser', JSON.stringify(u));
+            } catch (e) { /* silent */ }
+        },
+        clearCurrentUser: function () {
+            try {
+                sessionStorage.removeItem('cs_currentUser');
+            } catch (e) { /* silent */ }
+        }
+    };
+
+    /* ---------- STATE ---------- */
+    var state = {
+        currentTab: 'products',
+        editingProductId: null,
+        editingNoteId: null,
+        selectedNoteColor: '#E67E00',
+        debtorItems: [],
+        lowStockNotified: new Set()
+    };
+
+    /* ---------- DOM REFERENCES ---------- */
+    var $ = function (id) { return document.getElementById(id); };
+
+    /* ---------- AUTH ---------- */
+    var authMode = 'login';
+
+    function showAuth() {
+        $('splash-screen').classList.add('hidden');
+        $('auth-screen').classList.remove('hidden');
+        $('main-app').classList.add('hidden');
+        authMode = 'login';
+        updateAuthUI();
+    }
+
+    function showMainApp() {
+        $('auth-screen').classList.add('hidden');
+        $('main-app').classList.remove('hidden');
+        updateStoreBadge(true);
+        renderAll();
+        checkLowStock();
+    }
+
+    function showSplash() {
+        $('main-app').classList.add('hidden');
+        $('auth-screen').classList.add('hidden');
+        $('splash-screen').classList.remove('hidden');
+    }
+
+    function updateAuthUI() {
+        if (authMode === 'login') {
+            $('auth-title').textContent = 'Login';
+            $('auth-subtitle').textContent = 'Welcome back to your store!';
+            $('auth-submit').textContent = 'Login';
+            $('auth-submit').className = 'btn-primary btn-full';
+            $('toggle-auth').textContent = 'Register here';
+        } else {
+            $('auth-title').textContent = 'Register';
+            $('auth-subtitle').textContent = 'Create your store account';
+            $('auth-submit').textContent = 'Register';
+            $('auth-submit').className = 'btn-primary btn-full';
+            $('toggle-auth').textContent = 'Login here';
+        }
+        $('auth-error').classList.add('hidden');
+        $('auth-username').value = '';
+        $('auth-password').value = '';
+        $('auth-honeypot').value = '';
+    }
+
+    function showAuthError(msg) {
+        var el = $('auth-error');
+        el.textContent = msg;
+        el.classList.remove('hidden');
+        el.style.borderColor = 'rgba(231, 76, 60, 0.3)';
+        el.style.background = 'rgba(231, 76, 60, 0.12)';
+        el.style.color = '#ff6b6b';
+    }
+
+    async function handleAuth(e) {
+        e.preventDefault();
+
+        if ($('auth-honeypot').value !== '') return;
+
+        var rateCheck = checkRateLimit();
+        if (rateCheck.blocked) {
+            showAuthError('Too many attempts. Please wait ' + rateCheck.minutes + ' minute(s).');
+            return;
+        }
+
+        var username = sanitizeName($('auth-username').value);
+        var password = $('auth-password').value;
+
+        if (!username || !password) {
+            showAuthError('Please fill in all fields.');
+            return;
+        }
+
+        if (username.length < 3) {
+            showAuthError('Username must be at least 3 characters.');
+            return;
+        }
+
+        if (password.length < 4) {
+            showAuthError('Password must be at least 4 characters.');
+            return;
+        }
+
+        var hashedPw = await hashPassword(password);
+        var users = DB.getUsers();
+
+        if (authMode === 'register') {
+            var exists = users.some(function (u) { return u.username.toLowerCase() === username.toLowerCase(); });
+            if (exists) {
+                showAuthError('Username already taken.');
+                recordFailedLogin();
+                return;
+            }
+            users.push({
+                id: generateId(),
+                username: username,
+                password: hashedPw,
                 createdAt: Date.now()
-            };
-            const users = getUsers();
-            users[localUser.id] = localUser;
-            saveUsers(users);
-        }
-
-        Store.set(SESSION_KEY, {
-            userId: localUser.id,
-            username: localUser.username,
-            loginAt: Date.now(),
-            token: payload.token
-        });
-
-        // One-time migration: if the shared store is freshly empty and this device
-        // holds real local content, seed the server (never clobbers shared data).
-        const localData = getUserData(username);
-        const emptyServer = !serverData ||
-            (!serverData.products || !serverData.products.length) &&
-            (!serverData.notes || !serverData.notes.length) &&
-            (!serverData.debts || !serverData.debts.length) &&
-            (!serverData.lists || !serverData.lists.length);
-        const hasLocalContent = localData && (
-            (localData.products && localData.products.length) ||
-            (localData.notes && localData.notes.length) ||
-            (localData.debts && localData.debts.length) ||
-            (localData.lists && localData.lists.length));
-
-        if (migrated && emptyServer && hasLocalContent) {
-            const seed = {
-                products: localData.products || [],
-                notes: localData.notes || [],
-                lists: localData.lists || [],
-                debts: localData.debts || []
-            };
-            API.req('/api/data', { method: 'PUT', token: payload.token, body: seed });
-            saveUserData(username, seed);
-        } else if (serverData) {
-            saveUserData(username, {
-                products: serverData.products || [],
-                notes: serverData.notes || [],
-                lists: serverData.lists || [],
-                debts: serverData.debts || []
             });
+            DB.setUsers(users);
+            resetLoginAttempts();
+            authMode = 'login';
+            updateAuthUI();
+            showAuthError('');
+            $('auth-error').textContent = 'Account created! Please login.';
+            $('auth-error').classList.remove('hidden');
+            $('auth-error').style.borderColor = 'rgba(39, 174, 96, 0.3)';
+            $('auth-error').style.background = 'rgba(39, 174, 96, 0.12)';
+            $('auth-error').style.color = '#44bb44';
+            return;
+        } else {
+            var user = users.find(function (u) {
+                return u.username.toLowerCase() === username.toLowerCase() && u.password === hashedPw;
+            });
+            if (!user) {
+                showAuthError('Invalid username or password.');
+                recordFailedLogin();
+                return;
+            }
+            resetLoginAttempts();
+            DB.setCurrentUser({ id: user.id, username: user.username });
+            showMainApp();
         }
-
-        return { ok: true, user: { username: localUser.username, id: localUser.id } };
     }
 
     function logout() {
-        const session = Store.get(SESSION_KEY, null);
-        if (session && session.token && API.isUp()) {
-            API.req('/api/logout', { method: 'POST', token: session.token, body: {} });
-        }
-        Store.remove(SESSION_KEY);
-    }
-
-    /* ---------- Server data sync ---------- */
-
-    let syncTimer = null;
-
-    function scheduleSync(username) {
-        if (!API.isUp()) return;
-        const session = Store.get(SESSION_KEY, null);
-        if (!session || !session.token) return;
-        clearTimeout(syncTimer);
-        syncTimer = setTimeout(async () => {
-            syncTimer = null;
-            const data = getUserData(username);
-            const live = Store.get(SESSION_KEY, null);
-            if (!live || !live.token) return;
-            await API.req('/api/data', {
-                method: 'PUT',
-                token: live.token,
-                body: {
-                    products: data && data.products ? data.products : [],
-                    notes: data && data.notes ? data.notes : [],
-                    lists: data && data.lists ? data.lists : [],
-                    debts: data && data.debts ? data.debts : []
-                }
-            });
-        }, 400);
-    }
-
-    function saveUserData(username, data) {
-        Store.set('user_' + username.toLowerCase(), data);
-        scheduleSync(username);
-    }
-
-    function saveUserDataLocal(username, data) {
-        Store.set('user_' + username.toLowerCase(), data);
-    }
-
-    /* ---------- Refresh cache from server (on boot while logged in) ---------- */
-
-    async function refreshFromServer() {
-        const up = await API.ping();
-        if (!up) return 'offline';
-        const session = Store.get(SESSION_KEY, null);
-        if (!session || !session.token) return 'offline';
-
-        const r = await API.req('/api/data', { token: session.token });
-        if (r.status === 401) {
-            Store.remove(SESSION_KEY);
-            return 'expired';
-        }
-        if (r.status === 200 && r.data) {
-            const serverData = {
-                products: r.data.products || [],
-                notes: r.data.notes || [],
-                lists: r.data.lists || [],
-                debts: r.data.debts || []
-            };
-            const local = getUserData(session.username);
-            const localContent = local && (
-                (local.products && local.products.length) ||
-                (local.notes && local.notes.length) ||
-                (local.debts && local.debts.length) ||
-                (local.lists && local.lists.length));
-            const serverEmpty = !serverData.products.length && !serverData.notes.length &&
-                !serverData.debts.length && !serverData.lists.length;
-
-            if (serverEmpty && localContent) {
-                // Device holds data but the shared store is empty -> seed it once.
-                API.req('/api/data', { method: 'PUT', token: session.token, body: local });
-            } else {
-                saveUserDataLocal(session.username, serverData);
-            }
-            return 'ok';
-        }
-        return 'offline';
-    }
-
-    return {
-        register, login, logout, getCurrentUser, getUserData, saveUserData,
-        saveUserDataLocal, refreshFromServer, checkLocked
-    };
-})();
-
-/* ============================================================
-   UI HELPERS
-   ============================================================ */
-
-const UI = {
-    showScreen(name) {
-        document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-        document.getElementById(name + '-screen').classList.add('active');
-        window.scrollTo(0, 0);
-    },
-
-    formatMoney(amount) {
-        return '\u20B1' + Number(amount).toLocaleString('en-US', {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2
-        });
-    },
-
-    notify(message, type) {
-        const container = document.getElementById('notification-container');
-        if (!container) return;
-        const icons = { success: '\u2705', warning: '\u26A0\uFE0F', error: '\u274C', info: '\u2139\uFE0F' };
-        const el = document.createElement('div');
-        el.className = 'notification ' + (type || 'info');
-        el.innerHTML = '<span class="notify-icon">' + (icons[type] || icons.info) + '</span><span>' +
-            Security.escapeHtml(message) + '</span>';
-        container.appendChild(el);
-        setTimeout(() => {
-            el.classList.add('out');
-            setTimeout(() => el.remove(), 400);
-        }, 4000);
-    },
-
-    openModal(html) {
-        const overlay = document.getElementById('modal-overlay');
-        document.getElementById('modal-body').innerHTML = html;
-        overlay.classList.remove('hidden');
-        document.body.style.overflow = 'hidden';
-    },
-
-    closeModal() {
-        const overlay = document.getElementById('modal-overlay');
-        overlay.classList.add('hidden');
-        document.getElementById('modal-body').innerHTML = '';
-        document.body.style.overflow = '';
-    },
-
-    setFieldError(inputId, message) {
-        const el = document.getElementById(inputId);
-        if (!el) return;
-        const err = el.closest('.form-group') ? el.closest('.form-group').querySelector('.error-msg') : null;
-        if (err) {
-            err.textContent = message;
-            err.classList.add('visible');
-        }
-    },
-
-    clearFieldError(inputId) {
-        const el = document.getElementById(inputId);
-        if (!el) return;
-        const err = el.closest('.form-group') ? el.closest('.form-group').querySelector('.error-msg') : null;
-        if (err) {
-            err.textContent = '';
-            err.classList.remove('visible');
-        }
-    },
-
-    clearAllFieldErrors() {
-        document.querySelectorAll('.error-msg').forEach(e => {
-            e.textContent = '';
-            e.classList.remove('visible');
-        });
-    }
-};
-
-/* ============================================================
-   ACTION CONTEXT (which record the open modal is editing)
-   ============================================================ */
-
-const ActionContext = {
-    productId: null,
-    noteId: null,
-    debtId: null
-};
-
-/* ============================================================
-   PRODUCTS MODULE
-   ============================================================ */
-
-const Products = (function () {
-
-    const LOW_STOCK_THRESHOLD = 10;
-
-    function getAll() {
-        const session = Auth.getCurrentUser();
-        if (!session) return [];
-        return Auth.getUserData(session.username).products || [];
-    }
-
-    function findById(id) {
-        return getAll().find(p => p.id === id) || null;
-    }
-
-    function save(products) {
-        const session = Auth.getCurrentUser();
-        if (!session) return;
-        const data = Auth.getUserData(session.username);
-        data.products = products;
-        Auth.saveUserData(session.username, data);
-    }
-
-    function add(name, price, stock) {
-        const products = getAll();
-        const product = {
-            id: Security.generateId(),
-            name: name,
-            price: price,
-            stock: Math.max(0, Math.floor(stock)),
-            createdAt: Date.now()
-        };
-        products.push(product);
-        save(products);
-        return product;
-    }
-
-    function update(id, name, price) {
-        const products = getAll();
-        const idx = products.findIndex(p => p.id === id);
-        if (idx === -1) return null;
-        products[idx].name = name;
-        products[idx].price = price;
-        products[idx].updatedAt = Date.now();
-        save(products);
-        return products[idx];
-    }
-
-    function remove(id) {
-        save(getAll().filter(p => p.id !== id));
-    }
-
-    function decrement(id, qty) {
-        qty = Math.max(1, Math.floor(qty || 1));
-        const products = getAll();
-        const idx = products.findIndex(p => p.id === id);
-        if (idx === -1) return null;
-        const before = products[idx].stock;
-        products[idx].stock = Math.max(0, products[idx].stock - qty);
-        save(products);
-        const after = products[idx].stock;
-
-        if (after === 0) {
-            UI.notify('"' + products[idx].name + '" is now OUT OF STOCK!', 'warning');
-        } else if (after <= LOW_STOCK_THRESHOLD && before > LOW_STOCK_THRESHOLD) {
-            UI.notify('Low stock: "' + products[idx].name + '" only ' + after + ' pcs left!', 'warning');
-        }
-        return products[idx];
-    }
-
-    function addStock(id, qty) {
-        qty = Math.max(0, Math.floor(qty));
-        if (qty === 0) return null;
-        const products = getAll();
-        const idx = products.findIndex(p => p.id === id);
-        if (idx === -1) return null;
-        products[idx].stock += qty;
-        save(products);
-        return products[idx];
-    }
-
-    function search(term) {
-        const all = getAll();
-        term = (term || '').trim().toLowerCase();
-        if (!term) return all;
-        return all.filter(p => p.name.toLowerCase().includes(term));
-    }
-
-    function getLowStock() {
-        return getAll().filter(p => p.stock <= LOW_STOCK_THRESHOLD);
-    }
-
-    return {
-        LOW_STOCK_THRESHOLD, getAll, findById, add, update,
-        remove, decrement, addStock, search, getLowStock
-    };
-})();
-
-/* ============================================================
-   NOTES MODULE
-   ============================================================ */
-
-const Notes = (function () {
-
-    function getAll() {
-        const session = Auth.getCurrentUser();
-        if (!session) return [];
-        return Auth.getUserData(session.username).notes || [];
-    }
-
-    function save(notes) {
-        const session = Auth.getCurrentUser();
-        if (!session) return;
-        const data = Auth.getUserData(session.username);
-        data.notes = notes;
-        Auth.saveUserData(session.username, data);
-    }
-
-    function add(content) {
-        const notes = getAll();
-        const note = { id: Security.generateId(), content: content, createdAt: Date.now() };
-        notes.push(note);
-        save(notes);
-        return note;
-    }
-
-    function update(id, content) {
-        const notes = getAll();
-        const idx = notes.findIndex(n => n.id === id);
-        if (idx === -1) return null;
-        notes[idx].content = content;
-        notes[idx].updatedAt = Date.now();
-        save(notes);
-        return notes[idx];
-    }
-
-    function remove(id) {
-        save(getAll().filter(n => n.id !== id));
-    }
-
-    return { getAll, add, update, remove };
-})();
-
-/* ============================================================
-   DEBTS MODULE (owned / owed products - Utang tracker)
-   ============================================================ */
-
-const Debts = (function () {
-
-    function getAll() {
-        const session = Auth.getCurrentUser();
-        if (!session) return [];
-        return Auth.getUserData(session.username).debts || [];
-    }
-
-    function save(debts) {
-        const session = Auth.getCurrentUser();
-        if (!session) return;
-        const data = Auth.getUserData(session.username);
-        data.debts = debts;
-        Auth.saveUserData(session.username, data);
-    }
-
-    function computeTotal(items) {
-        return items.reduce((sum, it) => sum + (it.price * it.quantity), 0);
-    }
-
-    function add(debtorName, items) {
-        const debts = getAll();
-        const debt = {
-            id: Security.generateId(),
-            debtorName: debtorName,
-            items: items,
-            total: computeTotal(items),
-            paid: false,
-            createdAt: Date.now()
-        };
-        debts.push(debt);
-        save(debts);
-        return debt;
-    }
-
-    function markAllPaid(id) {
-        const debts = getAll();
-        const idx = debts.findIndex(d => d.id === id);
-        if (idx === -1) return null;
-        debts[idx].paid = true;
-        debts[idx].paidAt = Date.now();
-        save(debts);
-        return debts[idx];
-    }
-
-    function addItems(id, items) {
-        const debts = getAll();
-        const idx = debts.findIndex(d => d.id === id);
-        if (idx === -1) return null;
-        const debt = debts[idx];
-        if (debt.paid) return null;
-        debt.items = (debt.items || []).concat(items);
-        debt.total = computeTotal(debt.items);
-        debt.updatedAt = Date.now();
-        save(debts);
-        return debt;
-    }
-
-    function remove(id) {
-        save(getAll().filter(d => d.id !== id));
-    }
-
-    return { getAll, add, addItems, markAllPaid, remove, computeTotal };
-})();
-
-/* ============================================================
-   TEXT HELPERS
-   ============================================================ */
-
-function titleCase(str) {
-    return String(str).replace(/[A-Za-z0-9\u00C0-\u024F]+/g, function (word) {
-        return word.charAt(0).toUpperCase() + word.slice(1);
-    });
-}
-
-function firstCap(str) {
-    const s = String(str);
-    if (!s) return s;
-    return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
-/* ============================================================
-   RENDER FUNCTIONS
-   ============================================================ */
-
-function formatDate(ts) {
-    const d = new Date(ts);
-    return d.toLocaleString(undefined, {
-        month: 'short', day: 'numeric',
-        hour: 'numeric', minute: '2-digit'
-    });
-}
-
-function renderProducts(filterTerm) {
-    const container = document.getElementById('products-container');
-    let products = Products.search(filterTerm || '');
-
-    products = products.slice().sort((a, b) => {
-        const aEmpty = a.stock === 0 ? 1 : 0;
-        const bEmpty = b.stock === 0 ? 1 : 0;
-        if (aEmpty !== bEmpty) return aEmpty - bEmpty;
-        return b.createdAt - a.createdAt;
-    });
-
-    if (products.length === 0) {
-        container.innerHTML = '<div class="empty-state"><span class="empty-icon">\u{1F6D2}</span>' +
-            (filterTerm ? 'No products match your search.' : 'No products yet. Click "+ Add Product" to start!') +
-            '</div>';
-        return;
-    }
-
-    container.innerHTML = products.map(p => {
-        const low = p.stock <= Products.LOW_STOCK_THRESHOLD && p.stock > 0;
-        const empty = p.stock === 0;
-        const stockClass = empty ? 'empty' : low ? 'low' : 'ok';
-        const stockLabel = empty ? 'OUT OF STOCK' : low ? 'LOW STOCK: ' + p.stock + ' pcs' : 'In stock: ' + p.stock + ' pcs';
-        const cardClass = empty ? 'product-card out-of-stock' : low ? 'product-card low-stock' : 'product-card';
-        return '<div class="' + cardClass + '">' +
-            '<div class="product-name">' + Security.escapeHtml(p.name) + '</div>' +
-            '<div class="product-price">' + UI.formatMoney(p.price) + '</div>' +
-            '<span class="product-stock ' + stockClass + '">' + stockLabel + '</span>' +
-            '<div class="product-actions">' +
-                '<button class="minus-btn" data-action="minus" data-id="' + p.id + '" ' + (empty ? 'disabled' : '') + ' title="Someone bought - minus 1">\u2212 1</button>' +
-                '<button class="edit-btn" data-action="edit" data-id="' + p.id + '">Edit</button>' +
-                '<button class="delete-btn" data-action="delete" data-id="' + p.id + '">\u2715</button>' +
-            '</div>' +
-        '</div>';
-    }).join('');
-}
-
-function renderNotes() {
-    const container = document.getElementById('notes-container');
-    const notes = Notes.getAll().slice().sort((a, b) => b.createdAt - a.createdAt);
-
-    if (notes.length === 0) {
-        container.innerHTML = '<div class="empty-state"><span class="empty-icon">\u{1F4DD}</span>No notes yet.</div>';
-        return;
-    }
-
-    container.innerHTML = notes.map(n =>
-        '<div class="note-item">' +
-            '<div class="note-text">' + Security.escapeHtml(n.content).replace(/\n/g, '<br>') + '</div>' +
-            '<div class="note-meta">' + formatDate(n.createdAt) + '</div>' +
-            '<div class="note-actions">' +
-                '<button class="note-edit" data-action="edit-note" data-id="' + n.id + '">Edit</button>' +
-                '<button class="note-delete" data-action="delete-note" data-id="' + n.id + '">Delete</button>' +
-            '</div>' +
-        '</div>'
-    ).join('');
-}
-
-function renderLists() {
-    const container = document.getElementById('lists-container');
-    const products = Products.getAll().slice().sort((a, b) => b.createdAt - a.createdAt);
-
-    if (products.length === 0) {
-        container.innerHTML = '<div class="empty-state"><span class="empty-icon">\u{1F4CB}</span>No products yet. Add products to see your inventory here.</div>';
-        return;
-    }
-
-    container.innerHTML =
-        '<div class="lists-inventory">' +
-            '<table class="inventory-table">' +
-                '<thead>' +
-                    '<tr><th>Product</th><th>Price</th><th>Qty</th></tr>' +
-                '</thead>' +
-                '<tbody>' +
-                    products.map(p => {
-                        const qtyClass = p.stock === 0 ? 't-qty empty' : p.stock <= Products.LOW_STOCK_THRESHOLD ? 't-qty low' : 't-qty';
-                        return '<tr>' +
-                            '<td class="t-name">' + Security.escapeHtml(p.name) + '</td>' +
-                            '<td class="t-price">' + UI.formatMoney(p.price) + '</td>' +
-                            '<td class="' + qtyClass + '">' + p.stock + ' pcs</td>' +
-                        '</tr>';
-                    }).join('') +
-                '</tbody>' +
-            '</table>' +
-        '</div>';
-}
-
-function renderDebts() {
-    const container = document.getElementById('debts-container');
-    const debts = Debts.getAll().slice().sort((a, b) => {
-        if (a.paid !== b.paid) return a.paid ? 1 : -1;
-        return b.createdAt - a.createdAt;
-    });
-
-    if (debts.length === 0) {
-        container.innerHTML = '<div class="empty-state"><span class="empty-icon">\u{1F4B0}</span>No owed records yet.<br>Click "+ Add Debtor" to track someone who owes you.</div>';
-        return;
-    }
-
-    container.innerHTML = debts.map(d => {
-        const itemsHtml = d.items.map(it =>
-            '<li><span class="item-left"><span class="debt-item-qty">' + it.quantity + '\u00D7</span>' + Security.escapeHtml(it.name) + '</span><span>' + UI.formatMoney(it.price * it.quantity) + '</span></li>'
-        ).join('');
-
-        return '<div class="debt-card ' + (d.paid ? 'paid-out' : '') + '">' +
-            '<div class="debt-header">' +
-                '<span class="debt-name">' + Security.escapeHtml(d.debtorName) + '</span>' +
-                '<span class="debt-status ' + (d.paid ? 'paid' : 'unpaid') + '">' + (d.paid ? 'PAID' : 'UNPAID') + '</span>' +
-            '</div>' +
-            '<ul class="debt-items-list">' + itemsHtml + '</ul>' +
-            '<div class="debt-total">' +
-                '<span class="debt-total-label">Total Owed</span>' +
-                '<span class="debt-total-amount">' + UI.formatMoney(d.total) + '</span>' +
-            '</div>' +
-            '<div class="debt-actions">' +
-                (d.paid ? '' : '<button class="add-debt-item-btn" data-action="add-item-debt" data-id="' + d.id + '">+ Add Item</button>') +
-                '<button class="pay-btn" data-action="pay-all" data-id="' + d.id + '" ' + (d.paid ? 'disabled' : '') + '>Pay All</button>' +
-                '<button class="debt-delete-btn" data-action="delete-debt" data-id="' + d.id + '">\u2715</button>' +
-            '</div>' +
-        '</div>';
-    }).join('');
-}
-
-/* ============================================================
-   MODAL TEMPLATES
-   ============================================================ */
-
-function showAddProductModal() {
-    ActionContext.productId = null;
-    UI.openModal(
-        '<h3 class="modal-title">Add New Product</h3>' +
-        '<div class="modal-field">' +
-            '<label class="modal-label">Product Name <span class="required">*</span></label>' +
-            '<input type="text" id="m-name" maxlength="80" class="cap-words" placeholder="e.g. Biscuit, Milk, Soap...">' +
-        '</div>' +
-        '<div class="modal-field">' +
-            '<label class="modal-label">Price <span class="required">*</span></label>' +
-            '<input type="number" id="m-price" min="0" step="0.01" placeholder="e.g. 15.50">' +
-        '</div>' +
-        '<div class="modal-field">' +
-            '<label class="modal-label">Stock (pieces)</label>' +
-            '<input type="number" id="m-stock" min="0" step="1" placeholder="e.g. 20">' +
-        '</div>' +
-        '<div class="modal-actions">' +
-            '<button class="modal-btn secondary" data-m-close="1">Cancel</button>' +
-            '<button class="modal-btn primary" id="m-save-product">Save Product</button>' +
-        '</div>'
-    );
-}
-
-function showEditProductModal(id) {
-    const p = Products.findById(id);
-    if (!p) return;
-    ActionContext.productId = id;
-    UI.openModal(
-        '<h3 class="modal-title">Edit Product</h3>' +
-        '<div class="modal-field">' +
-            '<label class="modal-label">Product Name <span class="required">*</span></label>' +
-            '<input type="text" id="m-name" maxlength="80" class="cap-words" value="' + Security.escapeHtml(p.name) + '">' +
-        '</div>' +
-        '<div class="modal-field">' +
-            '<label class="modal-label">Price <span class="required">*</span></label>' +
-            '<input type="number" id="m-price" min="0" step="0.01" value="' + p.price + '">' +
-        '</div>' +
-        '<div class="modal-field">' +
-            '<label class="modal-label">Add More Stock</label>' +
-            '<input type="number" id="m-add-stock" min="0" step="1" value="0" placeholder="0">' +
-            '<div class="modal-req-hint">Current stock: ' + p.stock + ' pcs (enter extra pieces to restock)</div>' +
-        '</div>' +
-        '<div class="modal-actions">' +
-            '<button class="modal-btn secondary" data-m-close="1">Cancel</button>' +
-            '<button class="modal-btn primary" id="m-save-product">Save Changes</button>' +
-        '</div>'
-    );
-}
-
-function showAddNoteModal() {
-    ActionContext.noteId = null;
-    UI.openModal(
-        '<h3 class="modal-title">Add a Note</h3>' +
-        '<div class="modal-field">' +
-            '<label class="modal-label">Note</label>' +
-            '<textarea id="m-note" rows="5" class="cap-first" placeholder="Write your note here..." maxlength="2000"></textarea>' +
-        '</div>' +
-        '<div class="modal-actions">' +
-            '<button class="modal-btn secondary" data-m-close="1">Cancel</button>' +
-            '<button class="modal-btn primary" id="m-save-note">Save Note</button>' +
-        '</div>'
-    );
-}
-
-function showEditNoteModal(id) {
-    const note = Notes.getAll().find(n => n.id === id);
-    if (!note) return;
-    ActionContext.noteId = id;
-    UI.openModal(
-        '<h3 class="modal-title">Edit Note</h3>' +
-        '<div class="modal-field">' +
-            '<label class="modal-label">Note</label>' +
-            '<textarea id="m-note" rows="5" class="cap-first" maxlength="2000">' + Security.escapeHtml(note.content) + '</textarea>' +
-        '</div>' +
-        '<div class="modal-actions">' +
-            '<button class="modal-btn secondary" data-m-close="1">Cancel</button>' +
-            '<button class="modal-btn primary" id="m-save-note">Save Note</button>' +
-        '</div>'
-    );
-}
-
-function showAddDebtModal() {
-    const products = Products.getAll().filter(p => p.stock > 0);
-
-    UI.openModal(
-        '<h3 class="modal-title">Add Debtor (OwEd)</h3>' +
-        '<div class="modal-field">' +
-            '<label class="modal-label">Name <span class="required">*</span></label>' +
-            '<input type="text" id="m-debtor-name" maxlength="40" class="cap-words" placeholder="Who owes you?">' +
-        '</div>' +
-        '<div class="modal-field">' +
-            '<label class="modal-label">Items</label>' +
-            '<div class="debt-editor-items" id="m-debt-items">' +
-                '<div class="empty-state" id="m-debt-empty" style="padding:12px;">' +
-                    (products.length ? 'No items yet. Click "+ Add Item" below.' : 'No products in stock to owe right now.') +
-                '</div>' +
-            '</div>' +
-            '<button class="add-btn" id="m-add-debt-item" ' + (products.length ? '' : 'disabled') + ' style="margin-top:10px;">+ Add Item</button>' +
-        '</div>' +
-        '<div class="modal-field">' +
-            '<div class="debt-editor-total">' +
-                '<span>Grand Total (auto)</span>' +
-                '<span class="grand-total" id="m-debt-grand-total">' + UI.formatMoney(0) + '</span>' +
-            '</div>' +
-        '</div>' +
-        '<div class="modal-actions">' +
-            '<button class="modal-btn secondary" data-m-close="1">Cancel</button>' +
-            '<button class="modal-btn primary" id="m-save-debt">Save Owed Record</button>' +
-        '</div>'
-    );
-    bindDebtEditorEvents();
-}
-
-function showAddDebtItemModal(id) {
-    const debt = Debts.getAll().find(d => d.id === id);
-    if (!debt || debt.paid) {
-        UI.notify('Cannot add items to this owed record.', 'error');
-        return;
-    }
-    const products = Products.getAll().filter(p => p.stock > 0);
-    if (!products.length) {
-        UI.notify('No products in stock to add right now.', 'warning');
-        return;
-    }
-    ActionContext.debtId = id;
-
-    const optionsHtml = '<option value="">-- Select product --</option>' + products.map(p =>
-        '<option value="' + p.id + '" data-price="' + p.price + '">' + Security.escapeHtml(p.name) + ' (' + UI.formatMoney(p.price) + ')</option>'
-    ).join('');
-
-    const initialRow =
-        '<div class="debt-editor-row">' +
-            '<select class="debt-product-select">' + optionsHtml + '</select>' +
-            '<input type="number" class="debt-qty" min="1" step="1" value="1" placeholder="Qty">' +
-            '<span class="row-total">' + UI.formatMoney(0) + '</span>' +
-            '<button class="remove-item" data-action="rm-debt-item">\u2715</button>' +
-        '</div>';
-
-    UI.openModal(
-        '<h3 class="modal-title">Add Items to ' + Security.escapeHtml(debt.debtorName) + '</h3>' +
-        '<div class="modal-field">' +
-            '<label class="modal-label">Items</label>' +
-            '<div class="debt-editor-items" id="m-debt-items">' + initialRow + '</div>' +
-            '<button class="add-btn" id="m-add-debt-item" style="margin-top:10px;">+ Add Item</button>' +
-        '</div>' +
-        '<div class="modal-field">' +
-            '<div class="debt-editor-total">' +
-                '<span>New Total (incl. current \u20B1' + debt.total.toFixed(2) + ')</span>' +
-                '<span class="grand-total" id="m-debt-grand-total" data-base-total="' + debt.total + '">' + UI.formatMoney(debt.total) + '</span>' +
-            '</div>' +
-        '</div>' +
-        '<div class="modal-actions">' +
-            '<button class="modal-btn secondary" data-m-close="1">Cancel</button>' +
-            '<button class="modal-btn primary" id="m-save-debt-add">Add Items</button>' +
-        '</div>'
-    );
-    bindDebtEditorEvents();
-}
-
-/* ============================================================
-   DEBT EDITOR EVENTS
-   ============================================================ */
-
-function bindDebtEditorEvents() {
-    const items = document.getElementById('m-debt-items');
-    if (!items) return;
-
-    function showEmpty() {
-        let hint = items.querySelector('#m-debt-empty');
-        if (!hint) {
-            const products = Products.getAll().filter(p => p.stock > 0);
-            const p = document.createElement('div');
-            p.id = 'm-debt-empty';
-            p.className = 'empty-state';
-            p.style.padding = '12px';
-            p.textContent = products.length ? 'No items yet. Click "+ Add Item" below.' : 'No products in stock to owe right now.';
-            items.appendChild(p);
-        }
-    }
-
-    function hideEmpty() {
-        const hint = items.querySelector('#m-debt-empty');
-        if (hint) hint.remove();
-    }
-
-    function updateTotals() {
-        let total = 0;
-        items.querySelectorAll('.debt-editor-row').forEach(row => {
-            const select = row.querySelector('.debt-product-select');
-            const qtyInput = row.querySelector('.debt-qty');
-            const rowTotal = row.querySelector('.row-total');
-            const price = select && select.selectedOptions.length
-                ? Number(select.selectedOptions[0].dataset.price || 0) : 0;
-            const qty = Math.max(0, parseInt(qtyInput ? qtyInput.value : '0', 10) || 0);
-            const sum = price * qty;
-            total += sum;
-            if (rowTotal) rowTotal.textContent = UI.formatMoney(sum);
-        });
-        const grand = document.getElementById('m-debt-grand-total');
-        if (grand) {
-            const base = Number(grand.dataset.baseTotal || 0);
-            grand.textContent = UI.formatMoney(total + base);
-        }
-    }
-
-    items.addEventListener('change', (e) => {
-        if (e.target.matches('select, input')) updateTotals();
-    });
-    items.addEventListener('input', (e) => {
-        if (e.target.matches('input[type="number"]')) updateTotals();
-    });
-
-    items.addEventListener('click', (e) => {
-        const btn = e.target.closest('[data-action="rm-debt-item"]');
-        if (!btn) return;
-        btn.closest('.debt-editor-row').remove();
-        updateTotals();
-        if (!items.querySelector('.debt-editor-row')) showEmpty();
-    });
-
-    const addBtn = document.getElementById('m-add-debt-item');
-    if (addBtn) {
-        addBtn.addEventListener('click', () => {
-            const products = Products.getAll().filter(p => p.stock > 0);
-            if (!products.length) return;
-            hideEmpty();
-            const optionsHtml = '<option value="">-- Select product --</option>' + products.map(p =>
-                '<option value="' + p.id + '" data-price="' + p.price + '">' + Security.escapeHtml(p.name) + ' (' + UI.formatMoney(p.price) + ')</option>'
-            ).join('');
-            const row = document.createElement('div');
-            row.className = 'debt-editor-row';
-            row.innerHTML =
-                '<select class="debt-product-select">' + optionsHtml + '</select>' +
-                '<input type="number" class="debt-qty" min="1" step="1" value="1" placeholder="Qty">' +
-                '<span class="row-total">' + UI.formatMoney(0) + '</span>' +
-                '<button class="remove-item" data-action="rm-debt-item">\u2715</button>';
-            items.appendChild(row);
-            updateTotals();
+        showCloseBadge(function () {
+            DB.clearCurrentUser();
+            $('main-app').classList.add('hidden');
+            $('auth-screen').classList.remove('hidden');
+            authMode = 'login';
+            updateAuthUI();
         });
     }
 
-    updateTotals();
-}
-
-function collectDebtRows() {
-    const rows = document.querySelectorAll('#m-debt-items .debt-editor-row');
-    const items = [];
-    for (const row of rows) {
-        const select = row.querySelector('.debt-product-select');
-        const qtyInput = row.querySelector('.debt-qty');
-        if (!select || !select.value) continue;
-        const product = Products.findById(select.value);
-        if (!product) continue;
-        const qty = Math.max(1, Math.floor(Security.toNumber(qtyInput.value)) || 1);
-        if (qty > product.stock) {
-            UI.notify('"' + product.name + '" only has ' + product.stock + ' pcs in stock.', 'error');
-            return { ok: false, items: [] };
-        }
-        items.push({
-            productId: product.id,
-            name: product.name,
-            price: product.price,
-            quantity: qty
-        });
+    function showCloseBadge(callback) {
+        var badge = $('store-badge');
+        badge.className = 'store-badge badge-close';
+        badge.innerHTML = '<span class="badge-dot"></span>CLOSE!';
+        setTimeout(function () {
+            if (callback) callback();
+            badge.className = 'store-badge badge-open';
+            badge.innerHTML = '<span class="badge-dot"></span>OPEN!';
+        }, 1500);
     }
-    return { ok: true, items: items };
-}
 
-/* ============================================================
-   EVENT WIRING
-   ============================================================ */
-
-function wireGlobalEvents() {
-
-    // Floating items on opening screen (emoji + cute SVG)
-    const floating = ['\u{1F35E}', '\u{1F34E}', '\u{1F356}', '\u{1F37A}', '\u{1F36B}', '\u{1F36F}', '\u{1F355}', '\u{1F950}', '\u{1F35A}', '\u{1F952}', '\u{1F353}', '\u{1F966}', '\u{1F9C0}', '\u{1F36E}'];
-    const floatingSvg = [
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>',
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>',
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41 12 22 1.41 11.41a2 2 0 0 1 0-2.82L8 2h11a3 3 0 0 1 3 3Z"/><circle cx="7" cy="7" r="0.5"/><circle cx="17" cy="7" r="0.5"/></svg>',
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8Z"/></svg>',
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="4" cy="12" r="2"/><circle cx="20" cy="12" r="2"/><path d="M21 12h-7M2 12h4"/></svg>'
-    ];
-    const container = document.getElementById('floating-items');
-    for (let i = 0; i < 18; i++) {
-        const el = document.createElement('span');
-        el.className = 'floating-item';
-        if (i % 3 === 1) {
-            el.classList.add('floating-svg');
-            const svgWrap = document.createElement('span');
-            svgWrap.style.color = i % 2 ? '#ff9a3d' : '#ff7a00';
-            el.innerHTML = floatingSvg[i % floatingSvg.length];
-            el.style.width = (20 + Math.random() * 28) + 'px';
-            el.style.height = el.style.width;
-            el.style.fontSize = 'inherit';
+    function updateStoreBadge(isOpen) {
+        var badge = $('store-badge');
+        if (isOpen) {
+            badge.className = 'store-badge badge-open';
+            badge.innerHTML = '<span class="badge-dot"></span>OPEN!';
         } else {
-            el.textContent = floating[i % floating.length];
-            el.style.fontSize = (22 + Math.random() * 32) + 'px';
+            badge.className = 'store-badge badge-close';
+            badge.innerHTML = '<span class="badge-dot"></span>CLOSE!';
         }
-        el.style.left = (Math.random() * 95) + '%';
-        el.style.animationDuration = (12 + Math.random() * 18) + 's';
-        el.style.animationDelay = (Math.random() * 12) + 's';
-        container.appendChild(el);
     }
 
-    // START button -> go to auth
-    document.getElementById('start-btn').addEventListener('click', () => {
-        UI.showScreen('auth');
-    });
+    /* ---------- TABS ---------- */
+    function switchTab(tabName) {
+        state.currentTab = tabName;
+        document.querySelectorAll('.nav-btn[data-tab]').forEach(function (btn) {
+            btn.classList.toggle('active', btn.getAttribute('data-tab') === tabName);
+        });
+        document.querySelectorAll('.tab-content').forEach(function (tc) {
+            tc.classList.add('hidden');
+            tc.classList.remove('active');
+        });
+        var target = $('tab-' + tabName);
+        if (target) {
+            target.classList.remove('hidden');
+            target.classList.add('active');
+        }
+        renderAll();
+    }
 
-    // Auth tabs
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            const tab = btn.dataset.tab;
-            document.getElementById('login-form').classList.toggle('active', tab === 'login');
-            document.getElementById('register-form').classList.toggle('active', tab === 'register');
-            UI.clearAllFieldErrors();
-            document.querySelectorAll('.auth-message').forEach(m => {
-                m.textContent = '';
-                m.classList.remove('visible');
+    /* ---------- PRODUCTS ---------- */
+    function openAddProductModal() {
+        state.editingProductId = null;
+        $('product-modal-title').textContent = 'Add New Product';
+        $('product-submit-btn').textContent = 'Add Product';
+        $('product-name').value = '';
+        $('product-price').value = '';
+        $('product-quantity').value = '';
+        $('product-modal').classList.remove('hidden');
+        $('product-name').focus();
+    }
+
+    function openEditProductModal(id) {
+        var products = DB.getProducts();
+        var product = products.find(function (p) { return p.id === id; });
+        if (!product) return;
+
+        state.editingProductId = id;
+        $('product-modal-title').textContent = 'Edit Product';
+        $('product-submit-btn').textContent = 'Save Changes';
+        $('product-name').value = product.name;
+        $('product-price').value = product.price;
+        $('product-quantity').value = product.quantity;
+        $('product-modal').classList.remove('hidden');
+        $('product-name').focus();
+    }
+
+    function closeProductModal() {
+        $('product-modal').classList.add('hidden');
+        state.editingProductId = null;
+    }
+
+    function handleProductSubmit(e) {
+        e.preventDefault();
+
+        var name = sanitizeName($('product-name').value);
+        var price = validateNumber($('product-price').value, 0.01, 999999);
+        var quantity = validateNumber($('product-quantity').value, 0, 999999);
+
+        if (!name) {
+            alert('Please enter a valid product name.');
+            return;
+        }
+        if (price === null) {
+            alert('Please enter a valid price (minimum ₱0.01).');
+            return;
+        }
+        if (quantity === null || quantity < 0) {
+            alert('Please enter a valid quantity (0 or more).');
+            return;
+        }
+
+        var products = DB.getProducts();
+
+        if (state.editingProductId) {
+            var idx = products.findIndex(function (p) { return p.id === state.editingProductId; });
+            if (idx !== -1) {
+                products[idx].name = capitalizeWords(name);
+                products[idx].price = Math.round(price * 100) / 100;
+                products[idx].quantity = Math.floor(quantity);
+            }
+        } else {
+            products.push({
+                id: generateId(),
+                name: capitalizeWords(name),
+                price: Math.round(price * 100) / 100,
+                quantity: Math.floor(quantity),
+                createdAt: Date.now()
+            });
+        }
+
+        DB.setProducts(products);
+        closeProductModal();
+        renderAll();
+        checkLowStock();
+    }
+
+    function quickBuy(id) {
+        var products = DB.getProducts();
+        var idx = products.findIndex(function (p) { return p.id === id; });
+        if (idx === -1) return;
+        if (products[idx].quantity <= 0) return;
+
+        products[idx].quantity--;
+        DB.setProducts(products);
+        renderAll();
+        checkLowStock();
+    }
+
+    function deleteProduct(id) {
+        if (!confirm('Delete this product? This cannot be undone.')) return;
+        var products = DB.getProducts().filter(function (p) { return p.id !== id; });
+        DB.setProducts(products);
+        renderAll();
+    }
+
+    function searchProducts(query) {
+        var q = sanitize(query).toLowerCase();
+        var products = DB.getProducts();
+        if (!q) return products;
+        return products.filter(function (p) {
+            return p.name.toLowerCase().indexOf(q) !== -1;
+        });
+    }
+
+    function renderProducts() {
+        var query = $('search-products').value;
+        var products = searchProducts(query);
+        var grid = $('products-grid');
+        var empty = $('no-products');
+
+        if (products.length === 0) {
+            grid.innerHTML = '';
+            empty.classList.remove('hidden');
+            return;
+        }
+
+        empty.classList.add('hidden');
+
+        var html = '';
+        products.forEach(function (p) {
+            var isLow = p.quantity <= 10 && p.quantity > 0;
+            var isOut = p.quantity === 0;
+            var cardClass = 'product-card' + (isLow ? ' low-stock' : '');
+
+            html += '<div class="' + cardClass + '">';
+            html += '<div class="product-name">' + escapeHtml(p.name) + '</div>';
+            html += '<div class="product-price">' + formatPrice(p.price) + '</div>';
+            html += '<div class="product-stock">Stock: <strong>' + p.quantity + '</strong> pcs</div>';
+            html += '<div class="product-actions">';
+            html += '<button class="quick-buy-btn" data-id="' + p.id + '" ' + (isOut ? 'disabled' : '') + '>-1</button>';
+            html += '<button class="edit-btn" data-id="' + p.id + '">Edit</button>';
+            html += '<button class="delete-btn" data-id="' + p.id + '">Del</button>';
+            html += '</div>';
+            html += '</div>';
+        });
+
+        grid.innerHTML = html;
+    }
+
+    function renderProductList() {
+        var products = DB.getProducts();
+        var container = $('product-list-table');
+        var empty = $('no-list');
+        var count = $('product-count');
+
+        count.textContent = products.length + ' product' + (products.length !== 1 ? 's' : '');
+
+        if (products.length === 0) {
+            container.innerHTML = '';
+            empty.classList.remove('hidden');
+            return;
+        }
+
+        empty.classList.add('hidden');
+
+        var sorted = products.slice().sort(function (a, b) { return a.name.localeCompare(b.name); });
+
+        var html = '';
+        html += '<div class="list-table-header">';
+        html += '<span>#</span>';
+        html += '<span>Name</span>';
+        html += '<span>Price</span>';
+        html += '<span>Qty</span>';
+        html += '</div>';
+
+        sorted.forEach(function (p, i) {
+            html += '<div class="list-table-row">';
+            html += '<span class="list-row-num">' + (i + 1) + '</span>';
+            html += '<span class="list-row-name">' + escapeHtml(p.name) + '</span>';
+            html += '<span class="list-row-price">' + formatPrice(p.price) + '</span>';
+            html += '<span class="list-row-qty">' + p.quantity + '</span>';
+            html += '</div>';
+        });
+
+        container.innerHTML = html;
+    }
+
+    /* ---------- NOTES ---------- */
+    function openNoteModal(editId) {
+        var modal = $('note-modal');
+        if (editId) {
+            var notes = DB.getNotes();
+            var note = notes.find(function (n) { return n.id === editId; });
+            if (!note) return;
+            state.editingNoteId = editId;
+            $('note-modal-title').textContent = 'Edit Note';
+            $('note-content').value = note.content;
+            state.selectedNoteColor = note.color || '#E67E00';
+        } else {
+            state.editingNoteId = null;
+            $('note-modal-title').textContent = 'Add Note';
+            $('note-content').value = '';
+            state.selectedNoteColor = '#E67E00';
+        }
+
+        document.querySelectorAll('.color-swatch').forEach(function (sw) {
+            sw.classList.toggle('active', sw.getAttribute('data-color') === state.selectedNoteColor);
+        });
+
+        modal.classList.remove('hidden');
+        $('note-content').focus();
+    }
+
+    function closeNoteModal() {
+        $('note-modal').classList.add('hidden');
+        state.editingNoteId = null;
+    }
+
+    function handleNoteSubmit(e) {
+        e.preventDefault();
+
+        var content = sanitize($('note-content').value);
+        if (!content) {
+            alert('Please enter a note.');
+            return;
+        }
+
+        var notes = DB.getNotes();
+
+        if (state.editingNoteId) {
+            var idx = notes.findIndex(function (n) { return n.id === state.editingNoteId; });
+            if (idx !== -1) {
+                notes[idx].content = content;
+                notes[idx].color = state.selectedNoteColor;
+                notes[idx].updatedAt = Date.now();
+            }
+        } else {
+            notes.push({
+                id: generateId(),
+                content: content,
+                color: state.selectedNoteColor,
+                createdAt: Date.now()
+            });
+        }
+
+        DB.setNotes(notes);
+        closeNoteModal();
+        renderNotes();
+    }
+
+    function deleteNote(id) {
+        if (!confirm('Delete this note?')) return;
+        var notes = DB.getNotes().filter(function (n) { return n.id !== id; });
+        DB.setNotes(notes);
+        renderNotes();
+    }
+
+    function renderNotes() {
+        var notes = DB.getNotes();
+        var grid = $('notes-grid');
+        var empty = $('no-notes');
+
+        if (notes.length === 0) {
+            grid.innerHTML = '';
+            empty.classList.remove('hidden');
+            return;
+        }
+
+        empty.classList.add('hidden');
+
+        var sorted = notes.slice().sort(function (a, b) { return b.createdAt - a.createdAt; });
+
+        var html = '';
+        sorted.forEach(function (n) {
+            html += '<div class="note-card" style="border-left-color: ' + escapeHtml(n.color || '#E67E00') + '">';
+            html += '<div class="note-card-content">' + escapeHtml(n.content) + '</div>';
+            html += '<div class="note-card-footer">';
+            html += '<span class="note-date">' + formatDate(n.createdAt) + '</span>';
+            html += '<div class="note-card-actions">';
+            html += '<button class="note-edit" data-id="' + n.id + '">Edit</button>';
+            html += '<button class="note-del" data-id="' + n.id + '">Del</button>';
+            html += '</div>';
+            html += '</div>';
+            html += '</div>';
+        });
+
+        grid.innerHTML = html;
+    }
+
+    /* ---------- DEBTORS / UTANG ---------- */
+    function addDebtorItemRow() {
+        var products = DB.getProducts().filter(function (p) { return p.quantity > 0; });
+        if (products.length === 0) {
+            alert('No products with stock available.');
+            return;
+        }
+
+        var container = $('debtor-items');
+        var rowId = generateId();
+
+        var row = document.createElement('div');
+        row.className = 'debtor-item-row';
+        row.setAttribute('data-row-id', rowId);
+
+        var selectHtml = '<select class="debtor-item-select" data-row="' + rowId + '">';
+        selectHtml += '<option value="">Select product...</option>';
+        products.forEach(function (p) {
+            selectHtml += '<option value="' + p.id + '" data-price="' + p.price + '" data-name="' + escapeHtml(p.name) + '">' + escapeHtml(p.name) + ' (' + formatPrice(p.price) + ')</option>';
+        });
+        selectHtml += '</select>';
+
+        row.innerHTML = selectHtml +
+            '<input type="number" class="debtor-item-qty" data-row="' + rowId + '" placeholder="Qty" min="1" value="1">' +
+            '<span class="debtor-item-subtotal" data-row="' + rowId + '">₱0.00</span>' +
+            '<button type="button" class="remove-item-btn" data-row="' + rowId + '">✕</button>';
+
+        container.appendChild(row);
+    }
+
+    function removeDebtorItemRow(rowId) {
+        var row = document.querySelector('[data-row-id="' + rowId + '"]');
+        if (row) row.remove();
+        recalcDebtorTotal();
+    }
+
+    function recalcDebtorTotal() {
+        var total = 0;
+        document.querySelectorAll('.debtor-item-row').forEach(function (row) {
+            var select = row.querySelector('.debtor-item-select');
+            var qty = row.querySelector('.debtor-item-qty');
+            var subEl = row.querySelector('.debtor-item-subtotal');
+            var rowId = row.getAttribute('data-row-id');
+
+            var opt = select.options[select.selectedIndex];
+            var price = opt && opt.value ? parseFloat(opt.getAttribute('data-price')) || 0 : 0;
+            var quantity = parseInt(qty.value, 10) || 0;
+            var sub = price * quantity;
+
+            subEl.textContent = formatPrice(sub);
+            total += sub;
+        });
+        $('debtor-total-amount').textContent = formatPrice(total);
+    }
+
+    function saveDebtor() {
+        var name = sanitizeName($('debtor-name').value);
+        if (!name) {
+            alert('Please enter the customer name.');
+            return;
+        }
+
+        var rows = document.querySelectorAll('.debtor-item-row');
+        if (rows.length === 0) {
+            alert('Please add at least one item.');
+            return;
+        }
+
+        var items = [];
+        var total = 0;
+        var products = DB.getProducts();
+        var valid = true;
+
+        rows.forEach(function (row) {
+            var select = row.querySelector('.debtor-item-select');
+            var qtyInput = row.querySelector('.debtor-item-qty');
+
+            var productId = select.value;
+            var quantity = parseInt(qtyInput.value, 10);
+
+            if (!productId) {
+                valid = false;
+                return;
+            }
+            if (!quantity || quantity < 1) {
+                valid = false;
+                return;
+            }
+
+            var product = products.find(function (p) { return p.id === productId; });
+            if (!product) {
+                valid = false;
+                return;
+            }
+
+            var subtotal = product.price * quantity;
+            items.push({
+                productId: product.id,
+                productName: product.name,
+                price: product.price,
+                quantity: quantity,
+                subtotal: subtotal
+            });
+            total += subtotal;
+        });
+
+        if (!valid || items.length === 0) {
+            alert('Please fill in all items correctly.');
+            return;
+        }
+
+        var debtors = DB.getDebtors();
+        debtors.push({
+            id: generateId(),
+            name: capitalizeWords(name),
+            items: items,
+            total: Math.round(total * 100) / 100,
+            settled: false,
+            createdAt: Date.now()
+        });
+        DB.setDebtors(debtors);
+
+        $('debtor-name').value = '';
+        $('debtor-items').innerHTML = '';
+        $('debtor-total-amount').textContent = formatPrice(0);
+
+        renderDebtors();
+    }
+
+    function payDebtor(id) {
+        if (!confirm('Mark this debt as paid?')) return;
+        var debtors = DB.getDebtors();
+        var idx = debtors.findIndex(function (d) { return d.id === id; });
+        if (idx !== -1) {
+            debtors[idx].settled = true;
+            debtors[idx].paidAt = Date.now();
+            DB.setDebtors(debtors);
+            renderDebtors();
+        }
+    }
+
+    function deleteDebtor(id) {
+        if (!confirm('Delete this debt record?')) return;
+        var debtors = DB.getDebtors().filter(function (d) { return d.id !== id; });
+        DB.setDebtors(debtors);
+        renderDebtors();
+    }
+
+    function renderDebtors() {
+        var debtors = DB.getDebtors();
+        var list = $('debtors-list');
+        var empty = $('no-debtors');
+
+        var unsettled = debtors.filter(function (d) { return !d.settled; }).sort(function (a, b) { return b.createdAt - a.createdAt; });
+        var settled = debtors.filter(function (d) { return d.settled; }).sort(function (a, b) { return (b.paidAt || b.createdAt) - (a.paidAt || a.createdAt); });
+        var all = unsettled.concat(settled);
+
+        if (all.length === 0) {
+            list.innerHTML = '';
+            empty.classList.remove('hidden');
+            return;
+        }
+
+        empty.classList.add('hidden');
+
+        var html = '';
+        all.forEach(function (d) {
+            var cardStyle = d.settled ? 'opacity: 0.6;' : '';
+            html += '<div class="debtor-card" style="' + cardStyle + '">';
+            html += '<div class="debtor-card-header">';
+            html += '<span class="debtor-card-name">' + escapeHtml(d.name) + '</span>';
+            html += '<span class="debtor-card-date">' + formatDate(d.createdAt) + '</span>';
+            html += '</div>';
+
+            html += '<div class="debtor-card-items">';
+            d.items.forEach(function (item) {
+                html += '<div class="debtor-card-item">';
+                html += '<span class="debtor-card-item-name">' + escapeHtml(item.productName) + ' x' + item.quantity + '</span>';
+                html += '<span class="debtor-card-item-detail">' + formatPrice(item.subtotal) + '</span>';
+                html += '</div>';
+            });
+            html += '</div>';
+
+            html += '<div class="debtor-card-footer">';
+            if (d.settled) {
+                html += '<span class="debtor-card-settled">PAID</span>';
+                html += '<button class="btn-danger" data-action="delete-debtor" data-id="' + d.id + '">Remove</button>';
+            } else {
+                html += '<span class="debtor-card-total">' + formatPrice(d.total) + '</span>';
+                html += '<div style="display:flex;gap:8px;">';
+                html += '<button class="btn-success" data-action="pay-debtor" data-id="' + d.id + '">Pay All</button>';
+                html += '<button class="btn-danger" data-action="delete-debtor" data-id="' + d.id + '">Delete</button>';
+                html += '</div>';
+            }
+            html += '</div>';
+            html += '</div>';
+        });
+
+        list.innerHTML = html;
+    }
+
+    /* ---------- LOW STOCK ---------- */
+    function checkLowStock() {
+        var products = DB.getProducts();
+        var lowItems = products.filter(function (p) { return p.quantity > 0 && p.quantity <= 10; });
+        var outItems = products.filter(function (p) { return p.quantity === 0; });
+
+        var alerts = [];
+        lowItems.forEach(function (p) {
+            if (!state.lowStockNotified.has(p.id + '_low')) {
+                alerts.push('"' + p.name + '" has only ' + p.quantity + ' pcs left!');
+                state.lowStockNotified.add(p.id + '_low');
+            }
+        });
+        outItems.forEach(function (p) {
+            if (!state.lowStockNotified.has(p.id + '_out')) {
+                alerts.push('"' + p.name + '" is OUT OF STOCK!');
+                state.lowStockNotified.add(p.id + '_out');
+            }
+        });
+
+        if (alerts.length > 0) {
+            $('low-stock-message').textContent = alerts.join(' ');
+            $('low-stock-modal').classList.remove('hidden');
+        }
+    }
+
+    /* ---------- RENDER ALL ---------- */
+    function renderAll() {
+        renderProducts();
+        renderNotes();
+        renderDebtors();
+        renderProductList();
+    }
+
+    /* ---------- SPLASH FLOATING ITEMS ---------- */
+    function createFloatingItems() {
+        var container = $('floating-items');
+        if (!container) return;
+
+        var svgShapes = [
+            '<svg viewBox="0 0 40 40" width="40" height="40"><rect x="8" y="15" width="24" height="20" rx="3" fill="#E67E00"/><path d="M14 15V10a6 6 0 0112 0v5" fill="none" stroke="#E67E00" stroke-width="2"/></svg>',
+            '<svg viewBox="0 0 40 40" width="36" height="36"><ellipse cx="20" cy="22" rx="10" ry="13" fill="#FF4444"/><path d="M20 9c0-5 5-7 5-7s-1 5-5 7" fill="#44AA44"/></svg>',
+            '<svg viewBox="0 0 40 40" width="32" height="32"><rect x="12" y="5" width="16" height="30" rx="4" fill="#5599FF"/><rect x="16" y="10" width="8" height="8" rx="1" fill="#fff" opacity="0.3"/></svg>',
+            '<svg viewBox="0 0 40 40" width="38" height="38"><rect x="5" y="12" width="30" height="22" rx="3" fill="#FFD700"/><polygon points="5,12 20,2 35,12" fill="#FFD700"/><rect x="17" y="20" width="6" height="6" rx="1" fill="#1a1a1a"/></svg>',
+            '<svg viewBox="0 0 40 40" width="34" height="34"><circle cx="20" cy="20" r="14" fill="#E67E00" opacity="0.8"/><circle cx="15" cy="17" r="2" fill="#1a1a1a"/><circle cx="25" cy="17" r="2" fill="#1a1a1a"/><path d="M14 24c2 3 8 3 12 0" fill="none" stroke="#1a1a1a" stroke-width="1.5"/></svg>',
+            '<svg viewBox="0 0 40 40" width="30" height="30"><polygon points="20,2 25,15 39,15 28,24 32,38 20,30 8,38 12,24 1,15 15,15" fill="#FFD700" opacity="0.6"/></svg>',
+            '<svg viewBox="0 0 40 40" width="28" height="28"><path d="M20 35s-12-8-12-18a10 10 0 0120 0c0 10-12 18-12 18z" fill="#FF4444" opacity="0.5"/></svg>',
+            '<svg viewBox="0 0 40 40" width="36" height="36"><rect x="6" y="10" width="28" height="24" rx="2" fill="#44BB44" opacity="0.6"/><rect x="10" y="6" width="20" height="8" rx="2" fill="#44BB44" opacity="0.6"/></svg>'
+        ];
+
+        var html = '';
+        for (var i = 0; i < 12; i++) {
+            var shape = svgShapes[i % svgShapes.length];
+            var left = Math.random() * 90 + 2;
+            var top = Math.random() * 85 + 5;
+            var dur = 4 + Math.random() * 5;
+            var delay = Math.random() * 4;
+            var size = 0.6 + Math.random() * 0.8;
+
+            html += '<div class="floating-item" style="left:' + left + '%;top:' + top + '%;animation-duration:' + dur + 's;animation-delay:' + delay + 's;transform:scale(' + size + ')">' + shape + '</div>';
+        }
+        container.innerHTML = html;
+    }
+
+    /* ---------- EVENT LISTENERS ---------- */
+    function initEvents() {
+        $('start-btn').addEventListener('click', function () {
+            $('splash-screen').style.transition = 'opacity 0.5s ease';
+            $('splash-screen').style.opacity = '0';
+            setTimeout(function () {
+                $('splash-screen').style.opacity = '1';
+                showAuth();
+            }, 500);
+        });
+
+        $('toggle-auth').addEventListener('click', function (e) {
+            e.preventDefault();
+            authMode = authMode === 'login' ? 'register' : 'login';
+            updateAuthUI();
+        });
+
+        $('auth-form').addEventListener('submit', handleAuth);
+        $('logout-btn').addEventListener('click', logout);
+
+        document.querySelectorAll('.nav-btn[data-tab]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                switchTab(this.getAttribute('data-tab'));
             });
         });
-    });
 
-    /* ---------- REGISTER ---------- */
-    document.getElementById('register-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        UI.clearAllFieldErrors();
-        const messageEl = document.getElementById('register-message');
-        messageEl.classList.remove('visible', 'success', 'error');
+        $('add-product-btn').addEventListener('click', openAddProductModal);
+        $('product-form').addEventListener('submit', handleProductSubmit);
+        $('cancel-product').addEventListener('click', closeProductModal);
 
-        if (document.getElementById('reg-hp').value) {
-            UI.notify('Submission rejected.', 'error');
-            return;
-        }
-
-        const username = Security.sanitize(document.getElementById('reg-username').value, 40);
-        const password = document.getElementById('reg-password').value;
-        const confirm = document.getElementById('reg-confirm').value;
-
-        let valid = true;
-        if (!Security.isValidUsername(username)) {
-            UI.setFieldError('reg-username', 'Use 3-40 chars: letters, numbers, space, dot, dash, underscore.');
-            valid = false;
-        }
-        if (password.length < 6) {
-            UI.setFieldError('reg-password', 'Password must be at least 6 characters.');
-            valid = false;
-        }
-        if (password !== confirm) {
-            UI.setFieldError('reg-confirm', 'Passwords do not match.');
-            valid = false;
-        }
-        if (!valid) return;
-
-        const submitBtn = e.target.querySelector('button[type="submit"]');
-        submitBtn.disabled = true;
-        submitBtn.textContent = 'Creating...';
-
-        try {
-            const result = await Auth.register(username, password);
-            if (result.ok) {
-                messageEl.classList.add('visible', 'success');
-                messageEl.textContent = 'Account created! Please login.';
-                UI.notify('Account created! You can now login.', 'success');
-                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-                document.querySelector('[data-tab="login"]').classList.add('active');
-                document.getElementById('login-form').classList.add('active');
-                document.getElementById('register-form').classList.remove('active');
-                document.getElementById('login-username').value = username;
-                document.getElementById('login-password').value = '';
-                e.target.reset();
-            } else {
-                messageEl.classList.add('visible', 'error');
-                messageEl.textContent = result.message;
+        $('products-grid').addEventListener('click', function (e) {
+            var target = e.target;
+            if (target.classList.contains('quick-buy-btn')) {
+                quickBuy(target.getAttribute('data-id'));
+            } else if (target.classList.contains('edit-btn')) {
+                openEditProductModal(target.getAttribute('data-id'));
+            } else if (target.classList.contains('delete-btn')) {
+                deleteProduct(target.getAttribute('data-id'));
             }
-        } catch (err) {
-            messageEl.classList.add('visible', 'error');
-            messageEl.textContent = 'Something went wrong. Try again.';
-        } finally {
-            submitBtn.disabled = false;
-            submitBtn.textContent = 'Create Account';
-        }
-    });
-
-    /* ---------- LOGIN ---------- */
-    document.getElementById('login-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        UI.clearAllFieldErrors();
-        const messageEl = document.getElementById('login-message');
-        messageEl.classList.remove('visible', 'success', 'error');
-
-        if (document.getElementById('login-hp').value) {
-            UI.notify('Submission rejected.', 'error');
-            return;
-        }
-
-        const username = Security.sanitize(document.getElementById('login-username').value, 40);
-        const password = document.getElementById('login-password').value;
-
-        if (!username || !password) {
-            UI.notify('Please fill in username and password.', 'error');
-            return;
-        }
-
-        const submitBtn = e.target.querySelector('button[type="submit"]');
-        submitBtn.disabled = true;
-        submitBtn.textContent = 'Logging in...';
-
-        try {
-            const result = await Auth.login(username, password);
-            if (result.ok) {
-                enterStore(result.user);
-            } else {
-                messageEl.classList.add('visible', 'error');
-                messageEl.textContent = result.message;
-            }
-        } catch (err) {
-            messageEl.classList.add('visible', 'error');
-            messageEl.textContent = 'Login failed. Try again.';
-        } finally {
-            submitBtn.disabled = false;
-            submitBtn.textContent = 'Login';
-        }
-    });
-
-    /* ---------- SIGN OUT ---------- */
-    document.getElementById('signout-btn').addEventListener('click', () => {
-        Auth.logout();
-        UI.showScreen('auth');
-        document.getElementById('login-form').reset();
-        document.getElementById('register-form').reset();
-        UI.clearAllFieldErrors();
-        document.querySelectorAll('.auth-message').forEach(m => {
-            m.textContent = '';
-            m.classList.remove('visible');
         });
-        UI.notify('Signed out. Store is CLOSED.', 'info');
-    });
 
-    /* ---------- SEARCH ---------- */
-    let searchTimer = null;
-    const searchInput = document.getElementById('search-input');
-    searchInput.addEventListener('input', (e) => {
-        clearTimeout(searchTimer);
-        searchTimer = setTimeout(() => renderProducts(e.target.value), 200);
-    });
-    searchInput.addEventListener('search', () => renderProducts(searchInput.value));
-
-    /* ---------- AUTO-CAPITALIZE (cap-words / cap-first) ---------- */
-    document.addEventListener('input', (e) => {
-        const el = e.target;
-        if (!el || !el.tagName) return;
-        const tag = el.tagName.toLowerCase();
-        if (tag !== 'input' && tag !== 'textarea') return;
-        if (!el.classList.contains('cap-words') && !el.classList.contains('cap-first')) return;
-        const capWords = el.classList.contains('cap-words');
-        const hasSelection = (typeof el.selectionStart === 'number');
-        const start = hasSelection ? el.selectionStart : 0;
-        const raw = el.value;
-        const transformed = capWords ? titleCase(raw) : firstCap(raw);
-        if (transformed !== raw) {
-            el.value = transformed;
-            if (hasSelection && typeof el.setSelectionRange === 'function') {
-                const pos = Math.min(start, transformed.length);
-                el.setSelectionRange(pos, pos);
-            }
-        }
-    });
-
-    /* ---------- NAV BUTTONS ---------- */
-    document.querySelectorAll('.nav-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const view = btn.dataset.view;
-            document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-            const target = document.getElementById(view + '-view');
-            if (target) target.classList.add('active');
-            if (view === 'lists') renderLists();
+        var searchTimeout;
+        $('search-products').addEventListener('input', function () {
+            clearTimeout(searchTimeout);
+            var val = this.value;
+            searchTimeout = setTimeout(function () {
+                renderProducts();
+            }, 200);
         });
-    });
 
-    /* ---------- TOP BAR BUTTONS ---------- */
-    document.getElementById('add-product-btn').addEventListener('click', showAddProductModal);
-    document.getElementById('add-debt-btn').addEventListener('click', showAddDebtModal);
-    document.getElementById('notes-fab').addEventListener('click', showAddNoteModal);
+        $('floating-note-btn').addEventListener('click', function () {
+            openNoteModal();
+        });
 
-    /* ---------- MODAL CLOSE ---------- */
-    document.getElementById('modal-close').addEventListener('click', UI.closeModal);
-    document.getElementById('modal-overlay').addEventListener('click', (e) => {
-        if (e.target === document.getElementById('modal-overlay')) UI.closeModal();
-        const closeBtn = e.target.closest('[data-m-close]');
-        if (closeBtn) UI.closeModal();
-    });
+        $('note-form').addEventListener('submit', handleNoteSubmit);
+        $('cancel-note').addEventListener('click', closeNoteModal);
 
-    /* ---------- DELEGATED ITEM ACTIONS ---------- */
-    document.addEventListener('click', (e) => {
-        const actionEl = e.target.closest('[data-action]');
-        if (actionEl) {
-            const action = actionEl.dataset.action;
-            const id = actionEl.dataset.id;
+        document.querySelectorAll('.color-swatch').forEach(function (sw) {
+            sw.addEventListener('click', function () {
+                state.selectedNoteColor = this.getAttribute('data-color');
+                document.querySelectorAll('.color-swatch').forEach(function (s) {
+                    s.classList.remove('active');
+                });
+                this.classList.add('active');
+            });
+        });
 
-            switch (action) {
-                case 'minus':
-                    Products.decrement(id, 1);
-                    renderProducts();
-                    renderLists();
-                    break;
-                case 'edit':
-                    showEditProductModal(id);
-                    break;
-                case 'delete': {
-                    const p = Products.findById(id);
-                    if (p && confirm('Delete "' + p.name + '" from products?')) {
-                        Products.remove(id);
-                        renderProducts();
-                        renderLists();
-                        UI.notify('Product deleted.', 'info');
-                    }
-                    break;
-                }
-                case 'edit-note':
-                    showEditNoteModal(id);
-                    break;
-                case 'delete-note': {
-                    if (confirm('Delete this note?')) {
-                        Notes.remove(id);
-                        renderNotes();
-                    }
-                    break;
-                }
-                case 'add-item-debt':
-                    showAddDebtItemModal(id);
-                    break;
-                case 'pay-all': {
-                    const debt = Debts.getAll().find(d => d.id === id);
-                    if (debt && !debt.paid) {
-                        if (confirm('Mark "' + debt.debtorName + '" as fully paid (' + UI.formatMoney(debt.total) + ')?')) {
-                            Debts.markAllPaid(id);
-                            renderDebts();
-                            UI.notify(debt.debtorName + ' paid all! \u{1F389}', 'success');
-                        }
-                    }
-                    break;
-                }
-                case 'delete-debt': {
-                    if (confirm('Delete this owed record?')) {
-                        Debts.remove(id);
-                        renderDebts();
-                    }
-                    break;
-                }
+        $('notes-grid').addEventListener('click', function (e) {
+            var target = e.target;
+            if (target.classList.contains('note-edit')) {
+                openNoteModal(target.getAttribute('data-id'));
+            } else if (target.classList.contains('note-del')) {
+                deleteNote(target.getAttribute('data-id'));
             }
-            return;
-        }
+        });
 
-        // Expand / collapse product list
-        const listHeader = e.target.closest('.list-header');
-        if (listHeader && !e.target.closest('button')) {
-            listHeader.parentElement.classList.toggle('expanded');
-        }
-    });
+        $('add-debtor-item-btn').addEventListener('click', addDebtorItemRow);
 
-    /* ---------- MODAL SAVE ACTIONS ---------- */
-    document.addEventListener('click', (e) => {
-        const id = e.target.id;
-
-        if (id === 'm-save-product') {
-            const name = Security.sanitize(document.getElementById('m-name').value, 80);
-            const priceRaw = document.getElementById('m-price').value;
-            const price = Security.toNumber(priceRaw);
-
-            if (!name) {
-                UI.notify('Product name is required.', 'error');
-                return;
+        $('debtor-items').addEventListener('click', function (e) {
+            if (e.target.classList.contains('remove-item-btn')) {
+                removeDebtorItemRow(e.target.getAttribute('data-row'));
             }
-            if (priceRaw === '' || price < 0) {
-                UI.notify('Price is required and must be a valid number.', 'error');
-                return;
-            }
-            if (price <= 0) {
-                UI.notify('Price must be greater than 0.', 'error');
-                return;
-            }
+        });
 
-            if (ActionContext.productId) {
-                const p = Products.findById(ActionContext.productId);
-                if (p) {
-                    Products.update(ActionContext.productId, name, price);
-                    const addStockInput = document.getElementById('m-add-stock');
-                    const addStock = addStockInput ? Math.max(0, Math.floor(Security.toNumber(addStockInput.value))) : 0;
-                    if (addStock > 0) {
-                        Products.addStock(ActionContext.productId, addStock);
-                        UI.notify('Restocked +' + addStock + ' pcs of "' + name + '".', 'success');
-                    } else {
-                        UI.notify('Product updated.', 'success');
-                    }
-                }
-            } else {
-                const stockInput = document.getElementById('m-stock');
-                const stock = stockInput ? Math.max(0, Math.floor(Security.toNumber(stockInput.value))) : 0;
-                const product = Products.add(name, price, stock);
-                UI.notify('"' + product.name + '" added to the store!', 'success');
-                if (stock === 0) {
-                    UI.notify('Note: "' + product.name + '" has 0 stock.', 'info');
-                }
+        $('debtor-items').addEventListener('input', function (e) {
+            if (e.target.classList.contains('debtor-item-select') || e.target.classList.contains('debtor-item-qty')) {
+                recalcDebtorTotal();
             }
-            UI.closeModal();
-            renderProducts();
-            renderLists();
-        }
+        });
 
-        if (id === 'm-save-note') {
-            const content = document.getElementById('m-note').value.trim();
-            if (!content) {
-                UI.notify('Note cannot be empty.', 'error');
-                return;
+        $('debtor-items').addEventListener('change', function (e) {
+            if (e.target.classList.contains('debtor-item-select')) {
+                recalcDebtorTotal();
             }
-            if (content.length > 2000) {
-                UI.notify('Note is too long.', 'error');
-                return;
+        });
+
+        $('save-debtor-btn').addEventListener('click', saveDebtor);
+
+        $('debtors-list').addEventListener('click', function (e) {
+            var target = e.target;
+            var action = target.getAttribute('data-action');
+            var id = target.getAttribute('data-id');
+            if (action === 'pay-debtor' && id) payDebtor(id);
+            if (action === 'delete-debtor' && id) deleteDebtor(id);
+        });
+
+        $('close-low-stock').addEventListener('click', function () {
+            $('low-stock-modal').classList.add('hidden');
+        });
+
+        document.querySelectorAll('.modal-overlay[data-close]').forEach(function (overlay) {
+            overlay.addEventListener('click', function () {
+                var modalId = this.getAttribute('data-close');
+                var modal = $(modalId);
+                if (modal) modal.classList.add('hidden');
+            });
+        });
+
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') {
+                document.querySelectorAll('.modal:not(.hidden)').forEach(function (m) {
+                    m.classList.add('hidden');
+                });
             }
-            if (ActionContext.noteId) {
-                Notes.update(ActionContext.noteId, content);
-                UI.notify('Note updated.', 'success');
-            } else {
-                Notes.add(content);
-                UI.notify('Note added.', 'success');
-            }
-            ActionContext.noteId = null;
-            UI.closeModal();
-            renderNotes();
-        }
-
-        if (id === 'm-save-debt') {
-            const name = Security.sanitize(document.getElementById('m-debtor-name').value, 40);
-            if (!name) {
-                UI.notify('Debtor name is required.', 'error');
-                return;
-            }
-
-            const result = collectDebtRows();
-            if (!result.ok) return;
-            if (result.items.length === 0) {
-                UI.notify('Add at least one item.', 'error');
-                return;
-            }
-
-            result.items.forEach(it => Products.decrement(it.productId, it.quantity));
-            const debt = Debts.add(name, result.items);
-            UI.notify(name + ' owes ' + UI.formatMoney(debt.total) + '.', 'info');
-            UI.closeModal();
-            ActionContext.debtId = null;
-            renderProducts();
-            renderLists();
-            renderDebts();
-        }
-
-        if (id === 'm-save-debt-add') {
-            const debtId = ActionContext.debtId;
-            const debt = Debts.getAll().find(d => d.id === debtId);
-            if (!debt || debt.paid) {
-                UI.notify('Cannot add items to this owed record.', 'error');
-                return;
-            }
-
-            const result = collectDebtRows();
-            if (!result.ok) return;
-            if (result.items.length === 0) {
-                UI.notify('Select at least one item to add.', 'error');
-                return;
-            }
-
-            result.items.forEach(it => Products.decrement(it.productId, it.quantity));
-            const updated = Debts.addItems(debtId, result.items);
-            if (!updated) {
-                UI.notify('Cannot add items to this owed record.', 'error');
-                return;
-            }
-            ActionContext.debtId = null;
-            UI.notify('Added items to ' + updated.debtorName + '. New total: ' + UI.formatMoney(updated.total) + '.', 'success');
-            UI.closeModal();
-            renderProducts();
-            renderLists();
-            renderDebts();
-        }
-    });
-}
-
-/* ============================================================
-   ENTER STORE
-   ============================================================ */
-
-function enterStore(user) {
-    document.getElementById('welcome-user').textContent = 'Hi, ' + user.username;
-    document.getElementById('search-input').value = '';
-    UI.showScreen('store');
-    renderProducts();
-    renderNotes();
-    renderLists();
-    renderDebts();
-
-    const low = Products.getLowStock();
-    if (low.length > 0) {
-        setTimeout(() => {
-            UI.notify(low.length + ' product(s) at or below 10 pcs. Check your stock!', 'warning');
-        }, 600);
+        });
     }
-}
 
-/* ============================================================
-   INIT
-   ============================================================ */
+    /* ---------- INIT ---------- */
+    function init() {
+        createFloatingItems();
+        initEvents();
 
-let booted = false;
-
-function boot() {
-    if (booted) return;
-    booted = true;
-
-    wireGlobalEvents();
-    UI.showScreen('opening');
-
-    const session = Auth.getCurrentUser();
-    if (session) {
-        const users = Store.get('users', {});
-        const account = users[session.userId];
-        if (account) {
-            enterStore({ username: account.username, id: account.id });
-
-            // Pull the latest shared data from the server and refresh the UI.
-            Auth.refreshFromServer().then(status => {
-                if (status === 'ok') {
-                    renderProducts();
-                    renderNotes();
-                    renderLists();
-                    renderDebts();
-                } else if (status === 'expired') {
-                    UI.showScreen('auth');
-                    UI.notify('Session expired. Please log in again.', 'warning');
-                }
-            }).catch(() => {});
+        var user = DB.getCurrentUser();
+        if (user) {
+            showMainApp();
+        } else {
+            $('splash-screen').classList.remove('hidden');
         }
     }
-}
 
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot);
-} else {
-    boot();
-}
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+
+})();
