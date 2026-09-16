@@ -144,7 +144,15 @@
         getCurrentUser: function () {
             try {
                 var u = localStorage.getItem('cs_currentUser');
-                return u ? JSON.parse(u) : null;
+                if (u) return JSON.parse(u);
+                u = sessionStorage.getItem('cs_currentUser');
+                if (u) {
+                    var parsed = JSON.parse(u);
+                    localStorage.setItem('cs_currentUser', u);
+                    sessionStorage.removeItem('cs_currentUser');
+                    return parsed;
+                }
+                return null;
             } catch (e) { return null; }
         },
         setCurrentUser: function (u) {
