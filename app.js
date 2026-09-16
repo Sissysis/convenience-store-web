@@ -908,25 +908,27 @@
     function updateInstallButton() {
         var btn = $('install-btn');
         if (!btn) return;
-        btn.classList.add('hidden');
-        if (isStandalone()) return;
-        if (deferredInstallPrompt) {
-            btn.classList.remove('hidden');
-        } else if (isIOS()) {
+        if (isStandalone()) {
+            btn.classList.add('hidden');
+        } else {
             btn.classList.remove('hidden');
         }
     }
 
     function showInstallModal() {
         var modal = $('install-modal');
-        var androidBox = $('install-android');
+        var promptBox = $('install-android-prompt');
+        var manualBox = $('install-android-manual');
         var iosBox = $('install-ios');
-        if (deferredInstallPrompt && !isIOS()) {
-            androidBox.classList.remove('hidden');
-            iosBox.classList.add('hidden');
-        } else {
-            androidBox.classList.add('hidden');
+        promptBox.classList.add('hidden');
+        manualBox.classList.add('hidden');
+        iosBox.classList.add('hidden');
+        if (deferredInstallPrompt) {
+            promptBox.classList.remove('hidden');
+        } else if (isIOS()) {
             iosBox.classList.remove('hidden');
+        } else {
+            manualBox.classList.remove('hidden');
         }
         modal.classList.remove('hidden');
     }
@@ -936,7 +938,7 @@
             deferredInstallPrompt.prompt();
             deferredInstallPrompt.userChoice.then(function (choice) {
                 if (choice && choice.outcome === 'accepted') {
-                    $('install-btn').classList.add('hidden');
+                    updateInstallButton();
                 }
                 deferredInstallPrompt = null;
             });
@@ -1067,9 +1069,11 @@
         $('install-confirm-install').addEventListener('click', function () {
             $('install-modal').classList.add('hidden');
             installApp();
-            if (!deferredInstallPrompt) updateInstallButton();
         });
         $('install-cancel').addEventListener('click', function () {
+            $('install-modal').classList.add('hidden');
+        });
+        $('install-manual-ok').addEventListener('click', function () {
             $('install-modal').classList.add('hidden');
         });
         $('install-ios-ok').addEventListener('click', function () {

@@ -3,7 +3,7 @@
    ============================================ */
 'use strict';
 
-var CACHE_NAME = 'cs-pwa-v1';
+var CACHE_NAME = 'cs-pwa-v2';
 var APP_SHELL = [
     './',
     './index.html',
@@ -37,6 +37,17 @@ self.addEventListener('activate', function (event) {
             );
         }).then(function () {
             return self.clients.claim();
+        }).then(function () {
+            // Tell open windows to reload so they get new content now.
+            return self.clients.matchAll({ type: 'window', includeUncontrolled: false })
+                .then(function (clients) {
+                    return Promise.all(clients.map(function (client) {
+                        if (client && client.navigate && client.url) {
+                            return client.navigate(client.url).catch(function () {});
+                        }
+                        return Promise.resolve();
+                    }));
+                });
         })
     );
 });
@@ -49,11 +60,10 @@ self.addEventListener('fetch', function (event) {
     var url = new URL(request.url);
     if (url.origin !== self.location.origin) return;
 
-    event.respondWith(
-        caches.match(request).then(function (cached) {
-            if (cached) return cached;
-
-            return fetch(request).then(function (response) {
+    // Pages: network-first so the latest version is always shown online.
+    if (request.mode === 'navigate') {
+        event.respondWith(
+            fetch(request).then(function (response) {
                 if (response && response.status === 200) {
                     var copy = response.clone();
                     caches.open(CACHE_NAME).then(function (cache) {
@@ -62,11 +72,35 @@ self.addEventListener('fetch', function (event) {
                 }
                 return response;
             }).catch(function () {
-                if (request.mode === 'navigate') {
-                    return caches.match('./index.html');
+                return caches.match(request).then(function (cached) {
+                    return cached || caches.match('./index.html');
+                }).catch(function () {
+                    return new Response('<h1>Offline</h1>', {
+                        status: 503,
+                        statusText: 'Offline',
+                        headers: { 'Content-Type': 'text/html' }
+                    });
+                });
+            })
+        );
+        return;
+    }
+
+    // Assets: stale-while-revalidate (serve fast, refresh cache in background).
+    event.respondWith(
+        caches.match(request).then(function (cached) {
+            var network = fetch(request).then(function (response) {
+                if (response && response.status === 200) {
+                    var copy = response.clone();
+                    caches.open(CACHE_NAME).then(function (cache) {
+                        cache.put(request, copy);
+                    });
                 }
-                return new Response('Offline', { status: 503, statusText: 'Offline' });
+                return response;
+            }).catch(function () {
+                return cached;
             });
+            return cached || network;
         })
     );
 });

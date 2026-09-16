@@ -1281,14 +1281,16 @@ select option {
 /* ============================================
    INSTALL MODAL
    ============================================ */
-.install-android p,
+.install-android-prompt p,
+.install-android-manual p,
 .install-ios p {
     color: var(--text-secondary);
     line-height: 1.6;
     margin-bottom: 12px;
 }
 
-.install-android strong,
+.install-android-prompt strong,
+.install-android-manual strong,
 .install-ios strong {
     color: var(--text);
 }
