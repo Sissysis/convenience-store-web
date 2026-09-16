@@ -604,6 +604,29 @@ select option {
     background: rgba(231, 76, 60, 0.15);
 }
 
+.nav-backup {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    font-family: var(--font);
+    color: var(--text-secondary);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: var(--transition);
+    white-space: nowrap;
+}
+
+.nav-backup:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text);
+    border-color: var(--border);
+}
+
 .nav-install {
     display: inline-flex;
     align-items: center;
@@ -1296,6 +1319,58 @@ select option {
 }
 
 /* ============================================
+   BACKUP MODAL
+   ============================================ */
+.backup-info {
+    color: var(--text-secondary);
+    line-height: 1.6;
+    margin-bottom: 16px;
+}
+
+.backup-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+.backup-actions .btn-primary,
+.backup-actions .btn-secondary {
+    justify-content: center;
+    width: 100%;
+}
+
+#backup-file {
+    display: none;
+}
+
+.backup-warning {
+    font-size: 0.8rem;
+    color: var(--danger);
+    background: rgba(231, 76, 60, 0.08);
+    border: 1px solid rgba(231, 76, 60, 0.2);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    line-height: 1.5;
+}
+
+.backup-result {
+    font-size: 0.9rem;
+    margin-bottom: 12px;
+    text-align: center;
+    min-height: 18px;
+}
+
+.backup-result.success {
+    color: var(--success);
+}
+
+.backup-result.error {
+    color: var(--danger);
+}
+
+/* ============================================
    SCROLLBAR
    ============================================ */
 ::-webkit-scrollbar {
@@ -1350,8 +1425,14 @@ select option {
         font-size: 0.78rem;
     }
 
-    .nav-install svg {
+    .nav-install svg,
+    .nav-backup svg {
         display: none;
+    }
+
+    .nav-backup {
+        padding: 8px 10px;
+        font-size: 0.78rem;
     }
 
     .tab-content {

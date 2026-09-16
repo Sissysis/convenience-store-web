@@ -37,17 +37,6 @@ self.addEventListener('activate', function (event) {
             );
         }).then(function () {
             return self.clients.claim();
-        }).then(function () {
-            // Tell open windows to reload so they get new content now.
-            return self.clients.matchAll({ type: 'window', includeUncontrolled: false })
-                .then(function (clients) {
-                    return Promise.all(clients.map(function (client) {
-                        if (client && client.navigate && client.url) {
-                            return client.navigate(client.url).catch(function () {});
-                        }
-                        return Promise.resolve();
-                    }));
-                });
         })
     );
 });

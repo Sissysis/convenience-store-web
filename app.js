@@ -143,18 +143,18 @@
         setDebtors: function (d) { this._set('debtors', d); },
         getCurrentUser: function () {
             try {
-                var u = sessionStorage.getItem('cs_currentUser');
+                var u = localStorage.getItem('cs_currentUser');
                 return u ? JSON.parse(u) : null;
             } catch (e) { return null; }
         },
         setCurrentUser: function (u) {
             try {
-                sessionStorage.setItem('cs_currentUser', JSON.stringify(u));
+                localStorage.setItem('cs_currentUser', JSON.stringify(u));
             } catch (e) { /* silent */ }
         },
         clearCurrentUser: function () {
             try {
-                sessionStorage.removeItem('cs_currentUser');
+                localStorage.removeItem('cs_currentUser');
             } catch (e) { /* silent */ }
         }
     };
@@ -947,6 +947,190 @@
         }
     }
 
+    /* ---------- BACKUP & RESTORE ---------- */
+    function openBackupModal() {
+        showBackupResult('', '');
+        $('backup-modal').classList.remove('hidden');
+    }
+
+    function closeBackupModal() {
+        $('backup-modal').classList.add('hidden');
+    }
+
+    function showBackupResult(msg, type) {
+        var el = $('backup-result');
+        el.textContent = msg;
+        el.className = 'backup-result' + (type ? ' ' + type : '');
+    }
+
+    function exportBackup() {
+        var payload = {
+            app: 'convenience-store',
+            version: 1,
+            exportedAt: Date.now(),
+            data: {
+                users: DB.getUsers(),
+                products: DB.getProducts(),
+                notes: DB.getNotes(),
+                debtors: DB.getDebtors()
+            }
+        };
+        var json = JSON.stringify(payload, null, 2);
+        var blob = new Blob([json], { type: 'application/json' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'convenience-store-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+        showBackupResult('Backup downloaded! Keep the file somewhere safe.', 'success');
+    }
+
+    function sanitizeBackupData(d) {
+        if (!d || !d.data || typeof d.data !== 'object') return null;
+        var data = d.data;
+        var out = { users: [], products: [], notes: [], debtors: [] };
+
+        function cap(arr, max) {
+            return Array.isArray(arr) ? arr.slice(0, max) : [];
+        }
+
+        out.users = cap(data.users, 1000).map(function (u) {
+            if (!u || typeof u !== 'object') return null;
+            var username = sanitizeName(u.username);
+            var password = typeof u.password === 'string' ? u.password.substring(0, 128) : '';
+            if (!username || !password) return null;
+            return {
+                id: String(u.id || generateId()),
+                username: username,
+                password: password,
+                createdAt: typeof u.createdAt === 'number' ? u.createdAt : Date.now()
+            };
+        }).filter(Boolean);
+
+        out.products = cap(data.products, 5000).map(function (p) {
+            if (!p || typeof p !== 'object') return null;
+            var name = sanitizeName(p.name);
+            var price = typeof p.price === 'number' && isFinite(p.price) ? Math.max(0, p.price) : null;
+            if (!name || price === null) return null;
+            var quantity = typeof p.quantity === 'number' && isFinite(p.quantity) ? Math.max(0, Math.floor(p.quantity)) : 0;
+            return {
+                id: String(p.id || generateId()),
+                name: capitalizeWords(name),
+                price: Math.round(price * 100) / 100,
+                quantity: quantity,
+                createdAt: typeof p.createdAt === 'number' ? p.createdAt : Date.now()
+            };
+        }).filter(Boolean);
+
+        out.notes = cap(data.notes, 2000).map(function (n) {
+            if (!n || typeof n !== 'object') return null;
+            var content = sanitize(n.content);
+            if (!content) return null;
+            return {
+                id: String(n.id || generateId()),
+                content: content,
+                color: typeof n.color === 'string' ? n.color : '#E67E00',
+                createdAt: typeof n.createdAt === 'number' ? n.createdAt : Date.now()
+            };
+        }).filter(Boolean);
+
+        out.debtors = cap(data.debtors, 1000).map(function (deb) {
+            if (!deb || typeof deb !== 'object') return null;
+            var name = sanitizeName(deb.name);
+            if (!name) return null;
+            var items = cap(deb.items, 200).map(function (it) {
+                if (!it || typeof it !== 'object') return null;
+                var iname = sanitizeName(it.productName || it.name);
+                if (!iname) return null;
+                var price = typeof it.price === 'number' && isFinite(it.price) ? Math.max(0, it.price) : 0;
+                var qty = typeof it.quantity === 'number' && it.quantity > 0 ? Math.floor(it.quantity) : 1;
+                return {
+                    productId: String(it.productId || ''),
+                    productName: iname,
+                    price: price,
+                    quantity: qty,
+                    subtotal: Math.round(price * qty * 100) / 100
+                };
+            }).filter(Boolean);
+            if (!items.length) return null;
+            var summed = Math.round(items.reduce(function (s, it) { return s + it.subtotal; }, 0) * 100) / 100;
+            return {
+                id: String(deb.id || generateId()),
+                name: capitalizeWords(name),
+                items: items,
+                total: typeof deb.total === 'number' && isFinite(deb.total) ? deb.total : summed,
+                settled: !!deb.settled,
+                createdAt: typeof deb.createdAt === 'number' ? deb.createdAt : Date.now(),
+                paidAt: typeof deb.paidAt === 'number' ? deb.paidAt : undefined
+            };
+        }).filter(Boolean);
+
+        return out;
+    }
+
+    function restoreBackup(data) {
+        var clean = sanitizeBackupData(data);
+        if (!clean) return false;
+
+        DB.setUsers(clean.users);
+        DB.setProducts(clean.products);
+        DB.setNotes(clean.notes);
+        DB.setDebtors(clean.debtors);
+
+        var current = DB.getCurrentUser();
+        if (!current || !clean.users.some(function (u) { return u.id === current.id; })) {
+            DB.clearCurrentUser();
+        }
+        return true;
+    }
+
+    function handleBackupFile(file) {
+        if (!file) return;
+        if (file.size > 5 * 1024 * 1024) {
+            showBackupResult('File is too large.', 'error');
+            return;
+        }
+        var reader = new FileReader();
+        reader.onload = function (ev) {
+            var text = String(ev.target.result || '');
+            var parsed;
+            try {
+                parsed = JSON.parse(text);
+            } catch (e) {
+                showBackupResult('Invalid backup file.', 'error');
+                return;
+            }
+            if (!confirm('Restore this backup? It will replace ALL current accounts, products, notes, and debts on this device.')) {
+                return;
+            }
+            var ok = restoreBackup(parsed);
+            if (ok) {
+                showBackupResult('Backup restored successfully!', 'success');
+                setTimeout(function () {
+                    closeBackupModal();
+                    if (!DB.getCurrentUser()) {
+                        authMode = 'login';
+                        updateAuthUI();
+                        $('main-app').classList.add('hidden');
+                        $('auth-screen').classList.remove('hidden');
+                    } else {
+                        renderAll();
+                        checkLowStock();
+                    }
+                }, 900);
+            } else {
+                showBackupResult('This file is not a valid backup.', 'error');
+            }
+        };
+        reader.onerror = function () {
+            showBackupResult('Could not read the file.', 'error');
+        };
+        reader.readAsText(file);
+    }
+
     /* ---------- EVENT LISTENERS ---------- */
     function initEvents() {
         $('start-btn').addEventListener('click', function () {
@@ -1094,6 +1278,18 @@
         window.addEventListener('pagehide', function () {
             if (deferredInstallPrompt) deferredInstallPrompt = null;
         });
+
+        $('backup-btn').addEventListener('click', openBackupModal);
+        $('backup-export-btn').addEventListener('click', exportBackup);
+        $('backup-import-btn').addEventListener('click', function () {
+            $('backup-file').click();
+        });
+        $('backup-file').addEventListener('change', function () {
+            var file = this.files && this.files[0];
+            this.value = '';
+            handleBackupFile(file);
+        });
+        $('backup-close').addEventListener('click', closeBackupModal);
 
         document.addEventListener('keydown', function (e) {
             if (e.key === 'Escape') {
