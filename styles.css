@@ -604,6 +604,30 @@ select option {
     background: rgba(231, 76, 60, 0.15);
 }
 
+.nav-install {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    font-size: 0.85rem;
+    font-weight: 700;
+    font-family: var(--font);
+    color: #000;
+    background: linear-gradient(135deg, var(--primary-light), var(--primary));
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: var(--transition);
+    box-shadow: 0 2px 12px var(--primary-glow);
+    white-space: nowrap;
+    animation: pulseGlow 2s ease-in-out infinite;
+}
+
+.nav-install:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 18px var(--primary-glow);
+}
+
 /* ============================================
    TAB CONTENT
    ============================================ */
@@ -1255,6 +1279,21 @@ select option {
 }
 
 /* ============================================
+   INSTALL MODAL
+   ============================================ */
+.install-android p,
+.install-ios p {
+    color: var(--text-secondary);
+    line-height: 1.6;
+    margin-bottom: 12px;
+}
+
+.install-android strong,
+.install-ios strong {
+    color: var(--text);
+}
+
+/* ============================================
    SCROLLBAR
    ============================================ */
 ::-webkit-scrollbar {
@@ -1301,6 +1340,15 @@ select option {
     }
 
     .nav-btn svg {
+        display: none;
+    }
+
+    .nav-install {
+        padding: 8px 12px;
+        font-size: 0.78rem;
+    }
+
+    .nav-install svg {
         display: none;
     }
 

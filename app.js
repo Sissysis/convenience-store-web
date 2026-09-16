@@ -160,6 +160,7 @@
     };
 
     /* ---------- STATE ---------- */
+    var deferredInstallPrompt = null;
     var state = {
         currentTab: 'products',
         editingProductId: null,
@@ -892,6 +893,58 @@
         container.innerHTML = html;
     }
 
+    /* ---------- INSTALL APP ---------- */
+    function isStandalone() {
+        if (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) return true;
+        if (navigator.standalone === true) return true;
+        return false;
+    }
+
+    function isIOS() {
+        return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+            (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    }
+
+    function updateInstallButton() {
+        var btn = $('install-btn');
+        if (!btn) return;
+        btn.classList.add('hidden');
+        if (isStandalone()) return;
+        if (deferredInstallPrompt) {
+            btn.classList.remove('hidden');
+        } else if (isIOS()) {
+            btn.classList.remove('hidden');
+        }
+    }
+
+    function showInstallModal() {
+        var modal = $('install-modal');
+        var androidBox = $('install-android');
+        var iosBox = $('install-ios');
+        if (deferredInstallPrompt && !isIOS()) {
+            androidBox.classList.remove('hidden');
+            iosBox.classList.add('hidden');
+        } else {
+            androidBox.classList.add('hidden');
+            iosBox.classList.remove('hidden');
+        }
+        modal.classList.remove('hidden');
+    }
+
+    function installApp() {
+        if (deferredInstallPrompt) {
+            deferredInstallPrompt.prompt();
+            deferredInstallPrompt.userChoice.then(function (choice) {
+                if (choice && choice.outcome === 'accepted') {
+                    $('install-btn').classList.add('hidden');
+                }
+                deferredInstallPrompt = null;
+            });
+        } else {
+            showInstallModal();
+        }
+    }
+
     /* ---------- EVENT LISTENERS ---------- */
     function initEvents() {
         $('start-btn').addEventListener('click', function () {
@@ -1010,6 +1063,34 @@
             });
         });
 
+        $('install-btn').addEventListener('click', installApp);
+        $('install-confirm-install').addEventListener('click', function () {
+            $('install-modal').classList.add('hidden');
+            installApp();
+            if (!deferredInstallPrompt) updateInstallButton();
+        });
+        $('install-cancel').addEventListener('click', function () {
+            $('install-modal').classList.add('hidden');
+        });
+        $('install-ios-ok').addEventListener('click', function () {
+            $('install-modal').classList.add('hidden');
+        });
+
+        window.addEventListener('beforeinstallprompt', function (e) {
+            e.preventDefault();
+            deferredInstallPrompt = e;
+            updateInstallButton();
+        });
+
+        window.addEventListener('appinstalled', function () {
+            deferredInstallPrompt = null;
+            updateInstallButton();
+        });
+
+        window.addEventListener('pagehide', function () {
+            if (deferredInstallPrompt) deferredInstallPrompt = null;
+        });
+
         document.addEventListener('keydown', function (e) {
             if (e.key === 'Escape') {
                 document.querySelectorAll('.modal:not(.hidden)').forEach(function (m) {
@@ -1023,6 +1104,7 @@
     function init() {
         createFloatingItems();
         initEvents();
+        updateInstallButton();
 
         var user = DB.getCurrentUser();
         if (user) {

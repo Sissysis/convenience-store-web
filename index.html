@@ -106,6 +106,10 @@
                 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16,17 21,12 16,7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
                 Logout
             </button>
+            <button class="nav-install hidden" id="install-btn">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Install App
+            </button>
         </nav>
 
         <!-- ===== PRODUCTS TAB ===== -->
@@ -254,6 +258,32 @@
             <div class="modal-actions">
                 <button id="confirm-cancel" class="btn-cancel">Cancel</button>
                 <button id="confirm-ok" class="btn-primary">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ INSTALL MODAL ============ -->
+    <div id="install-modal" class="modal hidden">
+        <div class="modal-overlay" data-close="install-modal"></div>
+        <div class="modal-card">
+            <h3>Install the App</h3>
+            <div class="install-android hidden" id="install-android">
+                <p>Tap <strong>Install</strong> below to add the app to your home screen.</p>
+                <div class="modal-actions">
+                    <button type="button" id="install-cancel" class="btn-cancel">Cancel</button>
+                    <button type="button" id="install-confirm-install" class="btn-primary">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        Install
+                    </button>
+                </div>
+            </div>
+            <div class="install-ios hidden" id="install-ios">
+                <p><strong>iPhone / iPad:</strong> Tap the share button
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#aaa" stroke-width="2" style="vertical-align:-3px"><polygon points="13,2 3,14 12,14 11,22 21,10 12,10"/></svg>
+                    in Safari, then choose <strong>"Add to Home Screen"</strong>.</p>
+                <div class="modal-actions">
+                    <button type="button" id="install-ios-ok" class="btn-primary">OK</button>
+                </div>
             </div>
         </div>
     </div>
